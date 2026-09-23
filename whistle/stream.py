@@ -23,6 +23,50 @@ import numpy as np
 from config import AudioConfig
 
 
+class SilentInputError(RuntimeError):
+    """The input device delivered nothing but digital silence.
+
+    This is worth its own error because of how macOS fails: when an application
+    has not been granted microphone access, PortAudio still opens the stream and
+    still delivers buffers, and every sample in them is exactly zero. Nothing
+    raises. Without this check the whole program runs perfectly on silence -- it
+    calibrates a noise floor of -240 dBFS, opens its gates, and then never hears
+    a whistle, which looks like a tuning problem rather than a permissions one.
+    """
+
+
+def check_audio_present(frames, device: "DeviceInfo | None" = None) -> None:
+    """Raise SilentInputError if every sample across `frames` is exactly zero.
+
+    Exactly zero is the tell. A working microphone in a silent room still
+    produces dither and self-noise; a muted or unauthorised one produces
+    mathematical silence.
+    """
+    if any(np.any(np.asarray(frame)) for frame in frames):
+        return
+
+    name = "the input device" if device is None else f"'{device.name}'"
+    raise SilentInputError(
+        f"{name} delivered only digital silence.\n"
+        "\n"
+        "On macOS this almost always means the application running Python has "
+        "not been granted microphone access. PortAudio opens the stream and "
+        "hands back zeroed buffers rather than reporting an error.\n"
+        "\n"
+        "  1. System Settings -> Privacy & Security -> Microphone\n"
+        "  2. Enable the app you are running this from (the terminal app, your "
+        "editor, or Claude).\n"
+        "  3. Quit that app completely and reopen it. macOS does not apply a "
+        "new permission to an already-running process, so this step is not "
+        "optional.\n"
+        "\n"
+        "If the app is not in the list, run this from a plain Terminal window "
+        "once so macOS raises the prompt. Check the device with "
+        "`python main.py --list-devices`; a virtual device such as BlackHole "
+        "will also read as silent when nothing is routed into it."
+    )
+
+
 @dataclass(frozen=True)
 class DeviceInfo:
     index: int

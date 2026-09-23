@@ -45,7 +45,14 @@ from whistle.match import Match, MatchRunner, Phase, Role
 from whistle.pitch import PitchDetector, measure_noise_floor
 from whistle.sensor import ProximityWatch
 from whistle.songs import SongPlayer
-from whistle.stream import AudioStream, frames_for_seconds, list_input_devices
+from whistle.stream import (
+    AudioStream,
+    SilentInputError,
+    check_audio_present,
+    frames_for_seconds,
+    list_input_devices,
+    resolve_input_device,
+)
 
 MONITOR_HZ = 25.0
 
@@ -156,6 +163,7 @@ def calibrate_room(stream: AudioStream, detector: PitchDetector, config: Config)
     seconds = config.gates.calibration_seconds
     print(f"Measuring the room for {seconds:.1f}s -- please don't whistle yet...")
     frames = stream.read_frames(frames_for_seconds(seconds, config.audio))
+    check_audio_present(frames, stream.device)
     floor = measure_noise_floor(frames, detector)
     detector.set_noise_floor(floor)
     print(f"  noise floor {floor:.1f} dBFS, gate opens at "
@@ -163,17 +171,49 @@ def calibrate_room(stream: AudioStream, detector: PitchDetector, config: Config)
     return floor
 
 
-def start_monitor(detector: PitchDetector, config: Config):
-    """Launch the monitor process. Returns (process, queue) or (None, None)."""
+def enumerate_devices() -> list:
+    """Every input device, read once in the parent so the monitor process does
+    not need PortAudio of its own."""
+    import pyaudio
+
+    audio = pyaudio.PyAudio()
+    try:
+        return list_input_devices(audio)
+    finally:
+        audio.terminate()
+
+
+def default_device_index() -> int | None:
+    import pyaudio
+
+    audio = pyaudio.PyAudio()
+    try:
+        return int(audio.get_default_input_device_info()["index"])
+    except Exception:
+        return None
+    finally:
+        audio.terminate()
+
+
+def start_monitor(detector: PitchDetector, config: Config, devices, current_index):
+    """Launch the monitor process.
+
+    Two queues: snapshots out to the monitor, commands back from it. The monitor
+    never touches the audio device itself -- picking one in the dropdown only
+    posts a request, and this process, which owns the stream, decides what to do
+    with it.
+    """
     snapshots: multiprocessing.Queue = multiprocessing.Queue(maxsize=4)
+    commands: multiprocessing.Queue = multiprocessing.Queue(maxsize=8)
     process = multiprocessing.Process(
         target=run_monitor,
-        args=(snapshots, detector.band_frequencies, throttle_bounds(config.throttle)),
+        args=(snapshots, detector.band_frequencies, throttle_bounds(config.throttle),
+              devices, current_index, commands, detector.sensitivity),
         daemon=True,
         name="monitor",
     )
     process.start()
-    return process, snapshots
+    return process, snapshots, commands
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
@@ -267,28 +307,60 @@ def main(argv: list[str] | None = None) -> int:
         client.subscribe(config.mqtt.topic, lambda topic, payload: inbox.put(payload))
         time.sleep(1.0)   # let the subscription reach the broker before we rely on it
 
-    monitor_process, snapshots = (None, None)
+    monitor_process, snapshots, commands = (None, None, None)
     exit_code = 0
+    device_spec = config.audio.input_device
+    previous_spec = device_spec
+    opened_once = False
+
     try:
-        with AudioStream(config.audio) as stream:
-            print(f"Listening on {stream.device}")
-            calibrate_room(stream, detector, config)
+        if args.monitor:
+            devices = enumerate_devices()
+            current = resolve_input_device(devices, device_spec)
+            if current is None:
+                current = default_device_index()
+            monitor_process, snapshots, commands = start_monitor(
+                detector, config, devices, current)
 
-            if args.monitor:
-                monitor_process, snapshots = start_monitor(detector, config)
+        # The stream is reopened whenever the dropdown picks another microphone,
+        # so the whole audio path lives inside this loop. Match state, the robot
+        # and the broker sit outside it and survive a switch untouched.
+        while True:
+            audio_config = replace(config.audio, input_device=device_spec)
+            try:
+                with AudioStream(audio_config) as stream:
+                    print(f"Listening on {stream.device}")
+                    calibrate_room(stream, detector, config)
 
-            if args.no_mqtt:
-                print("  [mqtt off] starting immediately")
-                runner.handle(match.on_message(config.mqtt.start_message))
-            else:
-                print(f'Waiting for "{config.mqtt.start_message}" on '
-                      f"{config.mqtt.topic}...  (Ctrl-C to quit)")
+                    if not opened_once:
+                        opened_once = True
+                        if args.no_mqtt:
+                            print("  [mqtt off] starting immediately")
+                            runner.handle(match.on_message(config.mqtt.start_message))
+                        else:
+                            print(f'Waiting for "{config.mqtt.start_message}" on '
+                                  f"{config.mqtt.topic}...  (Ctrl-C to quit)")
+                        if sensor_thread is not None:
+                            sensor_thread.start()
 
-            if sensor_thread is not None:
-                sensor_thread.start()
+                    interpreter.reset()   # the old device's pitch history is stale
+                    switch_to = run_loop(stream, detector, interpreter, driver, runner,
+                                         inbox, sensor_thread, snapshots, commands,
+                                         config, role)
+            except SilentInputError as error:
+                print(f"\nNo audio is reaching the program.\n\n{error}")
+                if not opened_once:
+                    exit_code = 1
+                    break
+                # A live switch to a dud device should not end the match.
+                print(f"\nFalling back to the previous input device.")
+                device_spec = previous_spec
+                continue
 
-            exit_code = run_loop(stream, detector, interpreter, driver, runner,
-                                 inbox, sensor_thread, snapshots, config, role)
+            if switch_to is None:
+                break
+            previous_spec, device_spec = device_spec, switch_to
+            print(f"Switching input device to index {switch_to}...")
     except KeyboardInterrupt:
         print("\nInterrupted.")
     finally:
@@ -312,16 +384,29 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def run_loop(stream, detector, interpreter, driver, runner, inbox, sensor_thread,
-             snapshots, config: Config, role: Role) -> int:
-    """The control loop. One pass per analysis window, ~86 times a second."""
+             snapshots, commands, config: Config, role: Role) -> int | None:
+    """The control loop. One pass per analysis window, ~86 times a second.
+
+    Returns the device index the monitor asked to switch to, or None when the
+    match is finished and the program should stop.
+    """
     match = runner.match
     started = time.monotonic()
     next_snapshot = 0.0
     snapshot_interval = 1.0 / MONITOR_HZ
     announced = match.phase
 
+    device_name = stream.device.name if stream.device else ""
+
     for frame in stream.frames():
         now = time.monotonic() - started
+
+        requested_device, requested_sensitivity = drain_commands(commands)
+        if requested_sensitivity is not None:
+            # Gates only: no stream reopen, so this takes effect on the next frame.
+            detector.set_sensitivity(requested_sensitivity)
+        if requested_device is not None:
+            return requested_device
 
         while True:
             try:
@@ -349,18 +434,39 @@ def run_loop(stream, detector, interpreter, driver, runner, inbox, sensor_thread
         if snapshots is not None and now >= next_snapshot:
             next_snapshot = now + snapshot_interval
             push_snapshot(snapshots, now, reading, spectrum_db, intent, interpreter,
-                          match, role, config)
+                          match, role, config, device_name, detector)
 
         if match.phase is Phase.OVER:
             print(f"  match over: {runner.log[-1] if runner.log else 'done'}")
-            return 0
-    return 0
+            return None
+    return None
+
+
+def drain_commands(commands) -> tuple[int | None, float | None]:
+    """Latest (device, sensitivity) the monitor asked for. Never blocks.
+
+    Only the newest of each is kept. Dragging the slider posts several values in
+    a second and clicking around the dropdown posts several devices; replaying
+    every one would mean a stream reopen and a recalibration per tick.
+    """
+    if commands is None:
+        return None, None
+    device = sensitivity = None
+    while True:
+        try:
+            kind, value = commands.get_nowait()
+        except (queue.Empty, ValueError, OSError):
+            break
+        if kind == "device":
+            device = value
+        elif kind == "sensitivity":
+            sensitivity = value
+    return device, sensitivity
 
 
 def push_snapshot(snapshots, now, reading, spectrum_db, intent, interpreter,
-                  match, role, config) -> None:
+                  match, role, config, device_name="", detector=None) -> None:
     """Hand the monitor a frame, or skip it. Never block the control loop."""
-    gates = config.gates
     snapshot = Snapshot(
         t=now,
         spectrum_db=spectrum_db,
@@ -379,8 +485,9 @@ def push_snapshot(snapshots, now, reading, spectrum_db, intent, interpreter,
         role=role.value,
         sweep_cents=intent.sweep_cents or interpreter.sweeps.travel_cents,
         chirps=interpreter.chirps.chirps_so_far,
-        gate_thresholds=(gates.peak_to_median_db, gates.peak_to_second_db,
-                         gates.min_subharmonic_db),
+        gate_thresholds=detector.gate_thresholds,
+        sensitivity=detector.sensitivity,
+        device=device_name,
     )
     try:
         snapshots.put_nowait(snapshot)

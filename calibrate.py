@@ -31,7 +31,13 @@ from dataclasses import replace
 from config import Config, LOCAL_CONFIG_PATH, throttle_bounds
 from whistle.notes import describe
 from whistle.pitch import PitchDetector, measure_noise_floor
-from whistle.stream import AudioStream, frames_for_seconds, list_input_devices
+from whistle.stream import (
+    AudioStream,
+    SilentInputError,
+    check_audio_present,
+    frames_for_seconds,
+    list_input_devices,
+)
 
 BAND_MARGIN_CENTS = 200.0   # headroom below your lowest whistle, ~2 semitones
 
@@ -71,6 +77,7 @@ def measure_room(stream: AudioStream, detector: PitchDetector, config: Config) -
     seconds = config.gates.calibration_seconds
     wait_for_return(f"Silence please. Press Return, then stay quiet for {seconds:.0f}s... ")
     frames = stream.read_frames(frames_for_seconds(seconds, config.audio))
+    check_audio_present(frames, stream.device)
     floor = measure_noise_floor(frames, detector)
     print(f"  noise floor: {floor:6.1f} dBFS  "
           f"(gate opens at {floor + config.gates.noise_margin_db:6.1f} dBFS)")
@@ -148,14 +155,18 @@ def main(argv: list[str] | None = None) -> int:
     detector = PitchDetector(config.audio.sample_rate, config.audio.frame_size,
                              config.gates)
 
-    with AudioStream(config.audio) as stream:
-        print(f"Listening on {stream.device}\n")
-        floor = measure_room(stream, detector, config)
-        detector.set_noise_floor(floor)
+    try:
+        with AudioStream(config.audio) as stream:
+            print(f"Listening on {stream.device}\n")
+            floor = measure_room(stream, detector, config)
+            detector.set_noise_floor(floor)
 
-        print()
-        lowest = measure_whistle(stream, detector, config, "lowest")
-        highest = measure_whistle(stream, detector, config, "highest")
+            print()
+            lowest = measure_whistle(stream, detector, config, "lowest")
+            highest = measure_whistle(stream, detector, config, "highest")
+    except SilentInputError as error:
+        print(f"\nNo audio is reaching the program.\n\n{error}")
+        return 1
 
     overrides = recommend(lowest, highest, config)
     overrides.setdefault("gates", {})["noise_floor_db"] = round(floor, 1)

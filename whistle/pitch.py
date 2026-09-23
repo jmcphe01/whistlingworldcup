@@ -27,7 +27,7 @@ from __future__ import annotations
 
 import math
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import numpy as np
 
@@ -39,6 +39,46 @@ _EPSILON = 1e-12
 # Sub-harmonic search tolerance, and the lowest frequency worth looking at.
 _SUBHARMONIC_TOLERANCE = 0.03
 _SUBHARMONIC_FLOOR_HZ = 60.0
+
+
+SENSITIVITY_MIN = 0.0
+SENSITIVITY_MAX = 10.0
+SENSITIVITY_DEFAULT = 5.0
+
+# What the ends of the slider mean, as a multiplier on every gate threshold.
+_SCALE_AT_MIN = 2.0     # least sensitive: gates twice as hard to pass
+_SCALE_AT_MAX = 0.15    # most sensitive: gates nearly wide open
+
+
+def sensitivity_to_scale(sensitivity: float) -> float:
+    """Map the slider (0 = fussiest, 10 = most eager) to a threshold multiplier.
+
+    Piecewise linear with the configured values pinned to the midpoint, so the
+    slider's centre is always "exactly what config.py says" and moving either
+    way is a predictable, symmetric change.
+    """
+    sensitivity = max(SENSITIVITY_MIN, min(SENSITIVITY_MAX, float(sensitivity)))
+    if sensitivity <= SENSITIVITY_DEFAULT:
+        span = sensitivity / SENSITIVITY_DEFAULT
+        return _SCALE_AT_MIN + (1.0 - _SCALE_AT_MIN) * span
+    span = (sensitivity - SENSITIVITY_DEFAULT) / (SENSITIVITY_MAX - SENSITIVITY_DEFAULT)
+    return 1.0 + (_SCALE_AT_MAX - 1.0) * span
+
+
+def scaled_gates(base: GateConfig, scale: float) -> GateConfig:
+    """Scale the four decision thresholds by `scale`.
+
+    Only the thresholds. `min_hz` and `max_hz` are deliberately untouched: they
+    are baked into the FFT band masks when the detector is built, so changing
+    them here would silently disagree with the spectrum being analysed.
+    """
+    return replace(
+        base,
+        noise_margin_db=base.noise_margin_db * scale,
+        peak_to_median_db=base.peak_to_median_db * scale,
+        peak_to_second_db=base.peak_to_second_db * scale,
+        min_subharmonic_db=base.min_subharmonic_db * scale,
+    )
 
 
 @dataclass(frozen=True)
@@ -75,6 +115,8 @@ class PitchDetector:
         self.sample_rate = sample_rate
         self.frame_size = frame_size
         self.gates = gates or GateConfig()
+        self._base_gates = self.gates       # what the slider scales from
+        self.sensitivity = SENSITIVITY_DEFAULT
         self.noise_floor_db = self.gates.noise_floor_db
 
         # Hann window: a rectangular window smears a sine across many bins,
@@ -91,6 +133,19 @@ class PitchDetector:
                 f"search band {self.gates.min_hz}-{self.gates.max_hz} Hz is narrower "
                 f"than 3 bins at {sample_rate} Hz / {frame_size} samples"
             )
+
+    def set_sensitivity(self, sensitivity: float) -> float:
+        """Loosen or tighten every gate at once. Returns the multiplier applied."""
+        scale = sensitivity_to_scale(sensitivity)
+        self.sensitivity = max(SENSITIVITY_MIN, min(SENSITIVITY_MAX, float(sensitivity)))
+        self.gates = scaled_gates(self._base_gates, scale)
+        return scale
+
+    @property
+    def gate_thresholds(self) -> tuple[float, float, float, float]:
+        """The four marks the monitor draws, in the order it draws them."""
+        return (self.gates.noise_margin_db, self.gates.peak_to_median_db,
+                self.gates.peak_to_second_db, self.gates.min_subharmonic_db)
 
     def set_noise_floor(self, level_db: float) -> None:
         """Set the floor the level gate works from (see `measure_noise_floor`)."""

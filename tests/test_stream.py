@@ -9,6 +9,8 @@ from config import AudioConfig
 from whistle.stream import (
     DeviceInfo,
     FrameAssembler,
+    SilentInputError,
+    check_audio_present,
     frames_for_seconds,
     list_input_devices,
     resolve_input_device,
@@ -137,3 +139,50 @@ def test_the_real_configuration_updates_about_86_times_a_second():
     config = AudioConfig()
     assert config.sample_rate / config.hop_size == pytest.approx(86.1, abs=0.5)
     assert config.frame_size / config.sample_rate == pytest.approx(0.046, abs=0.002)
+
+
+# --- the silent-input guard -------------------------------------------------
+#
+# macOS fails microphone permission by handing back buffers of exact zeros
+# rather than raising. Everything downstream then works perfectly on silence:
+# the floor calibrates to -240 dBFS, the gates open, and no whistle ever
+# arrives. That looks like a tuning problem, so it has to be caught here.
+
+def test_real_audio_passes_the_guard():
+    check_audio_present([np.array([0.0, 0.0, 1e-7])])
+
+
+def test_all_zero_audio_is_rejected():
+    with pytest.raises(SilentInputError):
+        check_audio_present([np.zeros(2048), np.zeros(2048)])
+
+
+def test_the_guard_looks_across_every_frame():
+    """Silence at the start of a capture is normal; silence throughout is not."""
+    frames = [np.zeros(512), np.zeros(512), np.zeros(512)]
+    with pytest.raises(SilentInputError):
+        check_audio_present(frames)
+    frames[2][17] = -0.0004
+    check_audio_present(frames)
+
+
+def test_the_tiniest_real_sample_is_enough():
+    """A working mic in a silent room still produces dither; a muted one does
+    not. Exactly zero is the tell, so the threshold must be exact."""
+    frame = np.zeros(2048)
+    frame[0] = np.finfo(np.float32).tiny
+    check_audio_present([frame])
+
+
+def test_the_error_names_the_device_and_says_what_to_do():
+    with pytest.raises(SilentInputError) as caught:
+        check_audio_present([np.zeros(16)], DEVICES[1])
+    message = str(caught.value)
+    assert "MacBook Pro Microphone" in message
+    assert "Privacy & Security" in message
+    assert "reopen" in message, "the restart step is the one people miss"
+
+
+def test_an_empty_capture_counts_as_silent():
+    with pytest.raises(SilentInputError):
+        check_audio_present([])

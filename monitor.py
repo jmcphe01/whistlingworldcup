@@ -53,7 +53,10 @@ class Snapshot:
     role: str
     sweep_cents: float = 0.0
     chirps: int = 0
-    gate_thresholds: tuple[float, float, float] = (14.0, 8.0, 6.0)
+    device: str = ""
+    # noise margin, peak/median, peak/2nd peak, sub-harmonic -- in bar order
+    gate_thresholds: tuple[float, float, float, float] = (10.0, 14.0, 8.0, 6.0)
+    sensitivity: float = 5.0
 
 
 def pool_max(values: np.ndarray, bins: int) -> np.ndarray:
@@ -102,10 +105,113 @@ class TrackHistory:
             del self.pitches[:keep]
 
 
-def run_monitor(snapshots, band_frequencies, boundaries, title="Whistling World Cup"):
+from whistle.pitch import SENSITIVITY_MAX, SENSITIVITY_MIN
+
+MAX_LABEL_CHARS = 26
+
+
+def shorten(name: str, limit: int = MAX_LABEL_CHARS) -> str:
+    """Trim a device name to fit a button, keeping the distinguishing start."""
+    name = name.strip()
+    return name if len(name) <= limit else name[:limit - 1].rstrip() + "\u2026"
+
+
+def device_labels(devices) -> list[str]:
+    """One label per device. The index prefix guarantees they stay unique even
+    when two interfaces report the same name."""
+    return [f"[{device.index}] {shorten(device.name)}" for device in devices]
+
+
+def label_to_index(label: str, devices) -> int:
+    """Map a label from the list back to its PortAudio device index."""
+    for device, candidate in zip(devices, device_labels(devices)):
+        if candidate == label:
+            return device.index
+    raise KeyError(f"no device matching {label!r}")
+
+
+class DeviceSelector:
+    """A collapsed button that expands into the list of input devices.
+
+    matplotlib has no combobox, so this is a Button whose click toggles a
+    RadioButtons panel drawn over the readout text. The panel is hidden *and*
+    deactivated when collapsed: hiding an Axes does not stop its widget
+    receiving clicks, so without deactivating it the invisible list would keep
+    swallowing presses in that corner of the window.
+    """
+
+    def __init__(self, host_ax, devices, current_index, on_select):
+        from matplotlib.widgets import Button, RadioButtons
+
+        self.devices = list(devices)
+        self.on_select = on_select
+        self.labels = device_labels(self.devices)
+        self.open = False
+
+        try:
+            active = [d.index for d in self.devices].index(current_index)
+        except ValueError:
+            active = 0
+
+        self.button_ax = host_ax.inset_axes([0.02, 0.02, 0.66, 0.095])
+        self.button = Button(self.button_ax, "", hovercolor="0.88")
+        self.button.label.set_fontsize(9)
+        self.button.on_clicked(self._toggle)
+
+        height = min(0.74, 0.085 * len(self.labels) + 0.05)
+        self.list_ax = host_ax.inset_axes([0.02, 0.21, 0.66, height])
+        self.list_ax.set_zorder(20)
+        self.list_ax.set_facecolor("white")
+        self.list_ax.patch.set_alpha(1.0)
+
+        self.radio = RadioButtons(self.list_ax, self.labels, active=active)
+        for text in self.radio.labels:
+            text.set_fontsize(8)
+        self.radio.on_clicked(self._choose)
+
+        self.current_index = self.devices[active].index if self.devices else current_index
+        self._set_open(False)
+        self._refresh_button()
+
+    def _refresh_button(self) -> None:
+        current = next((d for d in self.devices if d.index == self.current_index), None)
+        name = shorten(current.name, 22) if current else "select input"
+        self.button.label.set_text(f"mic: {name}   {'^' if self.open else 'v'}")
+
+    def _set_open(self, is_open: bool) -> None:
+        self.open = is_open
+        self.list_ax.set_visible(is_open)
+        # Widget.active is the enable flag consulted by ignore(); a hidden Axes
+        # would otherwise still hand clicks to the radio buttons.
+        self.radio.active = is_open
+        self._refresh_button()
+
+    def _toggle(self, _event) -> None:
+        self._set_open(not self.open)
+        self.list_ax.figure.canvas.draw_idle()
+
+    def _choose(self, label: str) -> None:
+        index = label_to_index(label, self.devices)
+        self.current_index = index
+        self._set_open(False)
+        self.list_ax.figure.canvas.draw_idle()
+        self.on_select(index)
+
+
+def _shutdown(state, fig, plt) -> None:
+    """Stop the animation, then close. In that order, and off the step."""
+    animation = state.get("animation")
+    if animation is not None and animation.event_source is not None:
+        animation.event_source.stop()
+    plt.close(fig)
+
+
+def run_monitor(snapshots, band_frequencies, boundaries, devices=(), current_device=None,
+                commands=None, sensitivity=5.0, title="Whistling World Cup"):
     """Process entry point. Reads snapshots until it receives None."""
     import matplotlib.pyplot as plt
     from matplotlib.animation import FuncAnimation
+    from matplotlib.widgets import Slider
 
     axis = pool_centres(np.asarray(band_frequencies), MONITOR_BINS)
     backward_top, forward_top = boundaries
@@ -161,8 +267,34 @@ def run_monitor(snapshots, band_frequencies, boundaries, title="Whistling World 
     # --- readout ---
     readout_ax = axes["readout"]
     readout_ax.axis("off")
-    readout = readout_ax.text(0.02, 0.96, "", va="top", ha="left", fontsize=13,
+    readout = readout_ax.text(0.02, 0.97, "", va="top", ha="left", fontsize=11,
                               family="monospace", transform=readout_ax.transAxes)
+
+    def request(kind, value):
+        """Post a request to the audio loop. It owns the detector, not us."""
+        if commands is None:
+            return
+        try:
+            commands.put_nowait((kind, value))
+        except Exception:
+            pass   # the loop is busy; a dropped slider tick costs nothing
+
+    selector = None
+    if devices:
+        selector = DeviceSelector(readout_ax, devices, current_device,
+                                  lambda index: request("device", index))
+
+    # Sensitivity scales all four gate thresholds at once. The marks on the gate
+    # panel are drawn from the values that come back in each snapshot, so
+    # dragging this visibly moves them -- the slider explains itself.
+    slider_ax = readout_ax.inset_axes([0.17, 0.135, 0.48, 0.05])
+    sensitivity_slider = Slider(slider_ax, "sens ", SENSITIVITY_MIN, SENSITIVITY_MAX,
+                                valinit=sensitivity, valstep=0.5, valfmt="%.1f")
+    sensitivity_slider.label.set_fontsize(9)
+    sensitivity_slider.valtext.set_fontsize(9)
+    # valstep quantises the drag, so this fires a handful of times per sweep
+    # rather than once per pixel.
+    sensitivity_slider.on_changed(lambda value: request("sensitivity", value))
 
     state = {"latest": None, "running": True}
 
@@ -184,7 +316,15 @@ def run_monitor(snapshots, band_frequencies, boundaries, title="Whistling World 
     def draw(_frame):
         snapshot = drain()
         if not state["running"]:
-            plt.close(fig)
+            if not state.get("closing"):
+                state["closing"] = True
+                # Closing here would pull the timer out from under the animation
+                # mid-step, and matplotlib then raises on its own event source.
+                # Hand the close to a one-shot timer so it runs outside the step.
+                closer = fig.canvas.new_timer(interval=1)
+                closer.add_callback(_shutdown, state, fig, plt)
+                closer.start()
+                state["closer"] = closer     # a dropped timer never fires
             return []
         if snapshot is None:
             return []
@@ -206,7 +346,7 @@ def run_monitor(snapshots, band_frequencies, boundaries, title="Whistling World 
         over_floor = snapshot.level_db - snapshot.noise_floor_db
         values = [over_floor, snapshot.peak_to_median_db, snapshot.peak_to_second_db,
                   min(snapshot.subharmonic_db, 70.0)]
-        marks = [10.0, *snapshot.gate_thresholds]   # noise margin, then the shape gates
+        marks = list(snapshot.gate_thresholds)
         for bar, value, mark in zip(bars, values, marks):
             bar.set_width(max(0.0, value))
             bar.set_color("#5aa469" if value >= mark else "#c0504d")
@@ -227,11 +367,15 @@ def run_monitor(snapshots, band_frequencies, boundaries, title="Whistling World 
             f"{'  (steering)' if snapshot.steering else ''}\n"
             f"sweep     {snapshot.sweep_cents:+.0f} cents\n"
             f"chirps    {snapshot.chirps}/3\n"
-            f"level     {snapshot.level_db:6.1f} dB   floor {snapshot.noise_floor_db:6.1f} dB"
+            f"level     {snapshot.level_db:6.1f} dB\n"
+            f"floor     {snapshot.noise_floor_db:6.1f} dB\n\n"
+            f"mic       {shorten(snapshot.device, 22) or '--'}\n"
+            f"sens      {snapshot.sensitivity:.1f}"
         )
         readout.set_color(colour)
         return []
 
     animation = FuncAnimation(fig, draw, interval=40, blit=False, cache_frame_data=False)
     fig._whistle_animation = animation   # keep a reference alive
+    state["animation"] = animation
     plt.show()
