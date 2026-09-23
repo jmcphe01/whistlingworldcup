@@ -86,7 +86,8 @@ def test_a_change_mid_stream_goes_out_at_once(driver, robot):
     driver.apply(0.0, Drive.FORWARD)
     driver.apply(0.02, Drive.FORWARD)
     assert driver.apply(0.03, Drive.TURN_RIGHT) is True
-    assert robot.tank_calls[-1] == (55, -55)
+    turn = ThrottleConfig().speed_turn
+    assert robot.tank_calls[-1] == (turn, -turn)
 
 
 def test_the_current_command_is_resent_as_a_keepalive(driver, robot):

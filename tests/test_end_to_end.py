@@ -138,7 +138,8 @@ def test_a_real_rising_glide_steers_right():
     rig = Rig().feed(np.concatenate([
         sweep(note_to_hz("A4"), note_to_hz("A5"), 0.8), quiet(0.2)]))
     assert rig.saw(Drive.TURN_RIGHT)
-    assert (55, -55) in rig.tank_calls
+    turn = Config().throttle.speed_turn
+    assert (turn, -turn) in rig.tank_calls
 
 
 def test_a_real_falling_glide_steers_left():
