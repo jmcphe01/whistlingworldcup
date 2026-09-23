@@ -1,0 +1,22 @@
+# --- Audio input (assignment requirement) -----------------------------------
+PyAudio>=0.2.14          # microphone stream; needs Homebrew `portaudio`
+
+# --- Pitch detection / DSP ---------------------------------------------------
+numpy>=1.26
+scipy>=1.11              # bandpass filtering, peak interpolation
+
+# --- Robot -------------------------------------------------------------------
+legoeducation>=1.1.1     # LEGO Education BLE library (pulls bleak + pyobjc)
+
+# --- Networking --------------------------------------------------------------
+paho-mqtt>=2.0           # MQTT client (CallbackAPIVersion.VERSION2)
+
+# --- Sound output (death song / victory song) --------------------------------
+pygame>=2.5              # simple sample + tone playback
+
+# --- Live feedback UI --------------------------------------------------------
+matplotlib>=3.8          # real-time spectrum / pitch monitor
+
+# --- Testing -----------------------------------------------------------------
+pytest>=8.0
+pytest-cov>=5.0

@@ -1,0 +1,19 @@
+# Virtual environment
+.venv/
+venv/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Local, machine-specific settings (card serials, device index, mic calibration)
+config.local.json
+
+# macOS
+.DS_Store
