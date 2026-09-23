@@ -1,0 +1,5 @@
+Instructions:
+"""Using pyAudio, grab an audio stream and use it to control your robot.  
+For instance a high pitch whistle could speed up, a low make it come to a stop and in-between turns right or left.    
+On the day of the World Cup, you will be assigned a role ("ball" or "goalie") and you will attempt to drive into the goal (when there is a message "start" that comes across MQTT on the topic "ME193/Rogers").  
+If the goalie can come close to your light sensor (which must be open and in front of your car), you must shut down, publish an MQTT message that you failed, and play a death song.  Likewise, the goalie (subscribed to the same channel) must sing the song of success (you and your opponent need to agree on the messages sent).  Alternatively, if you make it in the goal, you must whistle a special command and that should trigger an MQTT message and the opposite songs must emerge."""
