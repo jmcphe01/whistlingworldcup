@@ -80,8 +80,8 @@ class ThrottleConfig:
     is currently active, so a pitch resting on a boundary cannot chatter.
     """
 
-    backward_top: str = "F#5"       # C4..F#5  -> reverse
-    forward_top: str = "A6"         # F#5..A6  -> forward
+    backward_top: str = "A5"        # C4..A5  -> reverse
+    forward_top: str = "A6"         # A5..A6  -> forward
     # Above A6 -> forward fast. D7 (2349 Hz) sits comfortably inside this zone.
 
     hysteresis_cents: float = 60.0
@@ -94,27 +94,39 @@ class ThrottleConfig:
 
 @dataclass(frozen=True)
 class GestureConfig:
-    """Pitch sweeps steer; three short high chirps claim the goal."""
+    """Holding a pitch drives; sliding it steers.
 
-    # A "long whistle that changes pitch significantly".
-    sweep_min_cents: float = 500.0          # ~5 semitones of net travel
-    sweep_min_duration: float = 0.35        # seconds of continuous whistling
-    sweep_max_duration: float = 2.00        # only the most recent 2 s are considered
-    sweep_monotonic_fraction: float = 0.65  # share of steps that move the same way
-    sweep_gap_timeout: float = 0.12         # silence this long ends a sweep
+    The two are told apart by how fast the pitch is moving, not by where it sits,
+    so a slide never doubles as a throttle command on its way through the zones.
+    There is a deliberate dead band between `hold_max_rate_cents` and
+    `slide_min_rate_cents` where neither applies and the car simply stops --
+    better an ambiguous whistle does nothing than the wrong thing.
+    """
 
-    # A completed sweep latches a pivot for this long. The turn has to outlive
-    # the whistle that requested it, or it would be cancelled the instant you
-    # stop whistling.
-    steer_hold_seconds: float = 0.70
+    motion_window_seconds: float = 0.30     # how much recent pitch to judge from
+    motion_gap_timeout: float = 0.12        # silence this long starts a new gesture
 
-    # Goal command: short, high, repeated. Deliberately unlike both the
-    # sustained drive tones and the sweeps, because a false positive here ends
-    # the match.
+    # Holding. The rate test matters as much as the spread one: the first
+    # moments of a slide have barely moved yet, and without it they would read
+    # as a held note and lurch the car forward before the turn took over.
+    hold_tolerance_cents: float = 100.0
+    hold_max_rate_cents: float = 250.0      # cents per second
+
+    # Sliding.
+    slide_min_rate_cents: float = 400.0     # cents per second, about 4 semitones
+    slide_min_duration: float = 0.15        # enough to tell a slide from a wobble
+    slide_monotonic_fraction: float = 0.60  # share of steps going the same way
+
+    # The turn outlives the slide by this much, purely to bridge the odd dropped
+    # frame. Steering is otherwise live: you turn for exactly as long as you slide.
+    steer_release_seconds: float = 0.20
+
+    # Goal command: short, high, repeated. Deliberately unlike both the sustained
+    # drive tones and the slides, because a false positive here ends the match.
     goal_chirp_count: int = 3
     goal_chirp_min_hz: float = 1760.0       # A6 and up
     goal_chirp_min_duration: float = 0.04
-    goal_chirp_max_duration: float = 0.25   # stays clear of sweep_min_duration
+    goal_chirp_max_duration: float = 0.25
     goal_chirp_max_gap: float = 0.45
     goal_chirp_window: float = 2.50
 

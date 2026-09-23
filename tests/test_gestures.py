@@ -1,9 +1,8 @@
-"""Sweep and chirp recognition.
+"""Motion classification and chirp recognition.
 
 Both detectors take an explicit timestamp, so these tests play whole gestures
 through them instantly. `HOP` is the real frame interval (11.6 ms at 44.1 kHz
-with a 512-sample hop), so the frame counts here match what the live stream
-produces.
+with a 512-sample hop), so the frame counts here match the live stream.
 """
 
 from __future__ import annotations
@@ -11,7 +10,7 @@ from __future__ import annotations
 import pytest
 
 from config import GestureConfig
-from whistle.gestures import FALLING, RISING, ChirpSequenceDetector, SweepDetector
+from whistle.gestures import ChirpSequenceDetector, Motion, MotionClassifier
 from whistle.notes import note_to_hz
 
 HOP = 512 / 44100.0     # 11.6 ms
@@ -42,111 +41,111 @@ def silence(seconds, hop=HOP):
     return [None] * max(1, int(round(seconds / hop)))
 
 
-# --- sweeps: the two turns --------------------------------------------------
-
-def test_a_rising_sweep_turns_right():
-    config = GestureConfig()
-    fired = play(SweepDetector(config), glide(note_to_hz("A4"), note_to_hz("A5"), 0.6))
-    assert len(fired) == 1
-    when, sweep = fired[0]
-    assert sweep.direction is RISING
-    assert sweep.cents >= config.sweep_min_cents
-    assert sweep.duration >= config.sweep_min_duration
-    assert when < 0.6, "the turn starts during the sweep, not after it"
+def motions(frames, config=None, hop=HOP):
+    classifier = MotionClassifier(config)
+    return [classifier.update(i * hop, f).motion for i, f in enumerate(frames)]
 
 
-def test_a_falling_sweep_turns_left():
-    fired = play(SweepDetector(), glide(note_to_hz("A5"), note_to_hz("A4"), 0.6))
-    assert len(fired) == 1
-    assert fired[0][1].direction is FALLING
-    assert fired[0][1].cents < 0
+def settled(frames, config=None, skip=8):
+    """Motions after the classifier has enough history to judge from."""
+    return set(motions(frames, config)[skip:])
 
 
-def test_a_held_note_never_looks_like_a_sweep():
-    """This is the important non-interference case: driving forward is a held
-    note, and it must not steer."""
-    assert play(SweepDetector(), hold(note_to_hz("A5"), 3.0)) == []
+# --- held versus sliding ----------------------------------------------------
+#
+# This split is the whole control scheme: a steady note is throttle, a moving
+# one is steering, and the two must never overlap.
+
+def test_a_steady_note_reads_as_held():
+    assert settled(hold(note_to_hz("A5"), 2.0)) == {Motion.HELD}
 
 
-def test_a_wobbly_held_note_is_not_a_sweep():
-    detector = SweepDetector()
+def test_sliding_up_reads_as_rising():
+    assert Motion.RISING in settled(glide(note_to_hz("A4"), note_to_hz("A6"), 1.0))
+
+
+def test_sliding_down_reads_as_falling():
+    assert Motion.FALLING in settled(glide(note_to_hz("A6"), note_to_hz("A4"), 1.0))
+
+
+def test_a_slide_is_never_also_held():
+    """The point of the change: a slide must not drive the car forward on its
+    way through the forward zone."""
+    for frames in (glide(note_to_hz("A4"), note_to_hz("A6"), 1.0),
+                   glide(note_to_hz("A6"), note_to_hz("A4"), 1.0)):
+        assert Motion.HELD not in settled(frames)
+
+
+def test_the_start_of_a_slide_is_not_mistaken_for_a_held_note():
+    """Its spread is still tiny in the first frames; only the rate test catches
+    it, and without that the car would lurch forward before turning."""
+    assert Motion.HELD not in set(motions(glide(note_to_hz("A4"), note_to_hz("A6"), 1.0)))
+
+
+def test_silence_reads_as_silent():
+    assert motions(silence(0.5))[-1] is Motion.SILENT
+
+
+def test_a_wobbly_note_still_counts_as_held():
+    """Whistling is not laboratory-steady; vibrato must not stop the car."""
+    base = note_to_hz("A5")
+    frames = [base * (1.0 + 0.012 * (1 if i % 2 else -1)) for i in range(120)]
+    assert settled(frames) == {Motion.HELD}
+
+
+def test_a_slow_drift_is_not_a_slide():
+    """Failing to hold a note perfectly should not be read as steering."""
+    assert not any(m.is_slide for m in settled(glide(880.0, 930.0, 2.0)))
+
+
+def test_a_scribble_is_neither_and_the_car_stops():
     frames = []
-    for i in range(240):
-        frames.append(note_to_hz("A5") * (1.0 + 0.02 * (1 if i % 2 else -1)))
-    assert play(detector, frames) == []
+    base = note_to_hz("A5")
+    for i in range(80):
+        frames.append(base * (1.30 if i % 2 else 0.77))
+    assert not any(m is Motion.HELD or m.is_slide for m in settled(frames))
 
 
-def test_a_short_pitch_change_is_not_a_sweep():
-    """"Long whistle" is part of the definition -- a quick blip must not steer."""
-    assert play(SweepDetector(), glide(note_to_hz("A4"), note_to_hz("A5"), 0.15)) == []
-
-
-def test_a_small_pitch_change_is_not_a_sweep():
-    assert play(SweepDetector(), glide(880.0, 950.0, 1.0)) == []   # ~130 cents
-
-
-def test_a_non_monotonic_scribble_is_not_a_sweep():
-    """Net travel alone is not enough; the whistle has to actually go one way."""
-    detector = SweepDetector(GestureConfig(sweep_monotonic_fraction=0.9))
-    frames = []
-    base = note_to_hz("A4")
-    for i in range(60):
-        frames.append(base * (1.0 + 0.02 * i) * (1.10 if i % 2 else 0.90))
-    assert play(detector, frames) == []
-
-
-def test_a_sweep_does_not_fire_on_every_frame():
-    """Without the reset-on-fire, a two-octave glide would latch a turn on each
-    of its ~130 frames. It should produce a handful of turns, not a hundred."""
-    frames = glide(note_to_hz("A4"), note_to_hz("A6"), 1.5)
-    fired = play(SweepDetector(), frames)
-    assert 1 <= len(fired) <= 4
-
-
-def test_a_longer_sweep_turns_further():
-    """Keeping the sweep going earns more turning, which is what makes the
-    gesture controllable rather than all-or-nothing."""
-    short = play(SweepDetector(), glide(note_to_hz("A4"), note_to_hz("A5"), 0.6))
-    long = play(SweepDetector(), glide(note_to_hz("A4"), note_to_hz("A6"), 1.2))
+def test_steering_lasts_as_long_as_the_slide():
+    """A longer slide means a longer turn, which is what makes it controllable."""
+    short = [m for m in motions(glide(note_to_hz("A4"), note_to_hz("A5"), 0.5)) if m.is_slide]
+    long = [m for m in motions(glide(note_to_hz("A4"), note_to_hz("A6"), 1.5)) if m.is_slide]
     assert len(long) > len(short)
-    assert all(sweep.direction is RISING for _, sweep in long)
 
 
-def test_two_separate_sweeps_both_fire():
-    frames = (glide(note_to_hz("A4"), note_to_hz("A5"), 0.6)
-              + silence(0.4)
-              + glide(note_to_hz("A4"), note_to_hz("A5"), 0.6))
-    assert len(play(SweepDetector(), frames)) == 2
+def test_a_brief_dropout_does_not_break_a_slide():
+    frames = glide(note_to_hz("A4"), note_to_hz("A6"), 1.0)
+    frames[30] = None
+    assert Motion.RISING in settled(frames)
 
 
-def test_a_brief_dropout_does_not_break_a_sweep():
-    """Whistles flicker below the gate for a frame or two; a sweep should survive."""
-    frames = glide(note_to_hz("A4"), note_to_hz("A5"), 0.7)
-    frames[20] = None       # one dropped frame, well under the gap timeout
-    assert len(play(SweepDetector(), frames)) == 1
-
-
-def test_a_long_silence_splits_one_sweep_into_nothing():
-    """Half a sweep, a pause, then the other half is not a gesture."""
-    frames = (glide(note_to_hz("A4"), note_to_hz("C#5"), 0.3)
+def test_a_long_silence_starts_a_new_gesture():
+    frames = (glide(note_to_hz("A4"), note_to_hz("C5"), 0.2)
               + silence(0.5)
-              + glide(note_to_hz("C#5"), note_to_hz("A5"), 0.3))
-    assert play(SweepDetector(), frames) == []
+              + hold(note_to_hz("C5"), 0.5))
+    assert motions(frames)[-1] is Motion.HELD
 
 
-def test_only_the_recent_window_counts():
-    """A very slow drift across 10 seconds is not a gesture, because only the
-    last `sweep_max_duration` seconds are considered."""
-    detector = SweepDetector(GestureConfig(sweep_max_duration=1.0))
-    assert play(detector, glide(note_to_hz("A4"), note_to_hz("A5"), 10.0)) == []
+def test_the_rate_is_reported_for_the_monitor():
+    classifier = MotionClassifier()
+    for index, frequency in enumerate(glide(note_to_hz("A4"), note_to_hz("A6"), 1.0)):
+        classifier.update(index * HOP, frequency)
+    assert classifier.rate_cents > 0
 
 
-def test_travel_is_reported_while_the_sweep_is_in_progress():
-    """The monitor shows this so you can see the gesture building."""
-    detector = SweepDetector()
-    for index, frequency in enumerate(glide(note_to_hz("A4"), note_to_hz("A5"), 0.30)):
-        detector.update(index * HOP, frequency)
-    assert detector.travel_cents > 500.0
+def test_a_faster_slide_reports_a_higher_rate():
+    def rate(seconds):
+        classifier = MotionClassifier()
+        for index, frequency in enumerate(glide(note_to_hz("A4"), note_to_hz("A6"), seconds)):
+            classifier.update(index * HOP, frequency)
+        return classifier.rate_cents
+
+    assert rate(0.5) > rate(2.0)
+
+
+def test_the_thresholds_are_configurable():
+    lazy = GestureConfig(slide_min_rate_cents=5000.0)
+    assert not any(m.is_slide for m in settled(glide(note_to_hz("A4"), note_to_hz("A6"), 1.0), lazy))
 
 
 # --- chirps: the goal command ----------------------------------------------

@@ -1,122 +1,157 @@
-"""Gestures: pitch sweeps steer, and three short high chirps claim the goal.
+"""Gestures: how the pitch is *moving* steers, and three short high chirps score.
 
 Both recognisers are fed one frame at a time with an explicit timestamp, and hold
 no reference to a clock. Tests therefore drive them through whole gestures
 instantly, and nothing here needs a microphone.
 
-Sweeps use the *smoothed* pitch, since they are long by definition and smoothing
-only helps. Chirps use the raw per-frame pitch: they are short enough that the
-tracker's persistence requirement would swallow them, and requiring tens of
-milliseconds of continuous voicing is its own persistence check.
+Motion uses the *smoothed* pitch, since smoothing only helps when the question
+is which way a note is travelling. Chirps use the raw per-frame pitch: they are
+short enough that the tracker's persistence requirement would swallow them, and
+requiring tens of milliseconds of continuous voicing is its own persistence check.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import Enum
+
+import numpy as np
 
 from config import GestureConfig
 from whistle.notes import cents_above_a4
 
-RISING = 1
-FALLING = -1
+class Motion(Enum):
+    """What the pitch is doing, which is what decides the command."""
+
+    SILENT = "silent"           # not whistling
+    UNSETTLED = "unsettled"     # moving, but neither clearly held nor a slide
+    HELD = "held"               # steady -> throttle
+    RISING = "rising"           # sliding up -> turn right
+    FALLING = "falling"         # sliding down -> turn left
+
+    @property
+    def is_slide(self) -> bool:
+        return self in (Motion.RISING, Motion.FALLING)
 
 
 @dataclass(frozen=True)
-class Sweep:
-    """A completed "long whistle that changes pitch significantly"."""
+class MotionReading:
+    motion: Motion
+    rate_cents: float = 0.0     # signed cents per second
+    spread_cents: float = 0.0   # highest minus lowest over the window
+    duration: float = 0.0
 
-    direction: int      # RISING or FALLING
-    cents: float        # signed net travel
-    duration: float     # seconds
 
+class MotionClassifier:
+    """Decides, each frame, whether the pitch is being held or slid.
 
-class SweepDetector:
-    """Recognises a sustained rising or falling whistle.
-
-    Three conditions: the whistle must be continuous for `sweep_min_duration`,
-    travel at least `sweep_min_cents` net, and be mostly monotonic. The last
-    condition is what separates a deliberate sweep from a wobbly held note that
-    happens to drift.
-
-    It fires as soon as those minimums are met rather than waiting for the
-    whistle to end, which is what keeps steering responsive -- the turn starts
-    part way into the sweep instead of after it. The tracking resets on each
-    fire, so keeping the sweep going earns another turn every further
-    `sweep_min_cents` of travel. A longer sweep therefore turns further, which is
-    the behaviour you want from a steering gesture.
+    This is the whole control split. A held note is a throttle command and a
+    slide is a steering command, so the two can never be issued at once and a
+    slide cannot drive the car forward on its way past the forward zone.
     """
 
     def __init__(self, config: GestureConfig | None = None):
         self.config = config or GestureConfig()
         self._track: list[tuple[float, float]] = []   # (time, cents above A4)
         self._last_voiced: float | None = None
+        self.last = MotionReading(Motion.SILENT)
 
     def reset(self) -> None:
         self._track.clear()
         self._last_voiced = None
+        self.last = MotionReading(Motion.SILENT)
 
     @property
-    def travel_cents(self) -> float:
-        """Net travel so far, for the live monitor."""
-        window = self._window()
-        return 0.0 if len(window) < 2 else window[-1][1] - window[0][1]
+    def rate_cents(self) -> float:
+        """Current slide rate, for the live monitor."""
+        return self.last.rate_cents
 
-    def update(self, now: float, frequency: float | None) -> Sweep | None:
-        """Feed one frame. Returns a Sweep on the frame the gesture completes."""
+    def update(self, now: float, frequency: float | None) -> MotionReading:
         if frequency is None:
             if self._last_voiced is not None and \
-                    now - self._last_voiced > self.config.sweep_gap_timeout:
+                    now - self._last_voiced > self.config.motion_gap_timeout:
                 self.reset()
-            return None
+            self.last = MotionReading(Motion.SILENT)
+            return self.last
 
-        # A long enough silence means this is a new gesture, not a continuation.
+        # A long enough silence means a new gesture, not a continuation.
         if self._last_voiced is not None and \
-                now - self._last_voiced > self.config.sweep_gap_timeout:
+                now - self._last_voiced > self.config.motion_gap_timeout:
             self._track.clear()
 
         self._track.append((now, cents_above_a4(frequency)))
         self._last_voiced = now
-
         window = self._window()
+
         if len(window) < 3:
-            return None
+            self.last = MotionReading(Motion.UNSETTLED)
+            return self.last
 
         duration = window[-1][0] - window[0][0]
-        if duration < self.config.sweep_min_duration:
-            return None
+        if duration <= 0:
+            self.last = MotionReading(Motion.UNSETTLED)
+            return self.last
 
-        net = window[-1][1] - window[0][1]
-        if abs(net) < self.config.sweep_min_cents:
-            return None
+        pitches = [cents for _, cents in window]
+        # Least-squares slope, not the difference between the first and last
+        # samples. Endpoint difference is at the mercy of where the window
+        # happens to land: on a wobbling note whose ends fall on opposite swings
+        # it reports a slide that is not there. A slope averages the wobble out
+        # while still tracking a genuine glide exactly.
+        rate = self._slope(window)
+        net = pitches[-1] - pitches[0]
+        spread = max(pitches) - min(pitches)
 
-        if self._monotonic_fraction(window, net) < self.config.sweep_monotonic_fraction:
-            return None
-
-        # Reset rather than stop: a continuing sweep can earn another turn once
-        # it has travelled another `sweep_min_cents`.
-        self.reset()
-        return Sweep(
-            direction=RISING if net > 0 else FALLING,
-            cents=net,
+        self.last = MotionReading(
+            motion=self._classify(window, rate, spread, duration),
+            rate_cents=rate,
+            spread_cents=spread,
             duration=duration,
         )
+        return self.last
+
+    def _classify(self, window, rate: float, spread: float,
+                  duration: float) -> Motion:
+        config = self.config
+
+        if (duration >= config.slide_min_duration
+                and abs(rate) >= config.slide_min_rate_cents
+                and self._monotonic_fraction(window, rate) >= config.slide_monotonic_fraction):
+            return Motion.RISING if rate > 0 else Motion.FALLING
+
+        # The rate test is what stops the opening moments of a slide -- which have
+        # barely moved, so their spread is still small -- reading as a held note.
+        if abs(rate) < config.hold_max_rate_cents and spread <= config.hold_tolerance_cents:
+            return Motion.HELD
+
+        return Motion.UNSETTLED
 
     def _window(self) -> list[tuple[float, float]]:
-        """The most recent `sweep_max_duration` seconds of the current whistle."""
+        """The most recent `motion_window_seconds` of the current whistle."""
         if not self._track:
             return []
-        cutoff = self._track[-1][0] - self.config.sweep_max_duration
+        cutoff = self._track[-1][0] - self.config.motion_window_seconds
         self._track = [point for point in self._track if point[0] >= cutoff]
         return self._track
 
     @staticmethod
-    def _monotonic_fraction(window: list[tuple[float, float]], net: float) -> float:
-        """Share of consecutive steps that move the same way as the net travel."""
+    def _slope(window) -> float:
+        """Least-squares rate of change, in cents per second."""
+        times = np.array([t for t, _ in window])
+        pitches = np.array([cents for _, cents in window])
+        spread = times - times.mean()
+        denominator = float((spread ** 2).sum())
+        if denominator == 0.0:
+            return 0.0
+        return float((spread * (pitches - pitches.mean())).sum() / denominator)
+
+    @staticmethod
+    def _monotonic_fraction(window, direction: float) -> float:
+        """Share of consecutive steps moving the same way as the overall trend."""
         steps = [b[1] - a[1] for a, b in zip(window, window[1:])]
         if not steps:
             return 0.0
-        agreeing = sum(1 for step in steps if step * net > 0)
-        return agreeing / len(steps)
+        return sum(1 for step in steps if step * direction > 0) / len(steps)
 
 
 class ChirpSequenceDetector:

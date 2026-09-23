@@ -61,7 +61,7 @@ def test_an_unknown_field_is_an_error(tmp_path):
 
 def test_the_throttle_zones_are_where_the_notes_say():
     low, high = throttle_bounds(Config().throttle)
-    assert low == pytest.approx(note_to_hz("F#5"))
+    assert low == pytest.approx(note_to_hz("A5"))
     assert high == pytest.approx(note_to_hz("A6"))
 
 
@@ -85,10 +85,11 @@ def test_the_goal_chirps_sit_above_the_top_zone_edge():
     assert config.gestures.goal_chirp_min_hz >= throttle_bounds(config.throttle)[1]
 
 
-def test_a_chirp_is_shorter_than_a_sweep():
-    """Otherwise the two gestures would overlap."""
+def test_there_is_a_dead_band_between_holding_and_sliding():
+    """A whistle that is neither clearly steady nor clearly moving should do
+    nothing, rather than guess between throttle and steering."""
     gestures = Config().gestures
-    assert gestures.goal_chirp_max_duration < gestures.sweep_min_duration
+    assert gestures.hold_max_rate_cents < gestures.slide_min_rate_cents
 
 
 # --- CLI overrides -----------------------------------------------------------

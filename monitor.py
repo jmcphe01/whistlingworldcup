@@ -51,7 +51,8 @@ class Snapshot:
     steering: bool
     phase: str
     role: str
-    sweep_cents: float = 0.0
+    slide_rate: float = 0.0
+    motion: str = ""
     chirps: int = 0
     device: str = ""
     # noise margin, peak/median, peak/2nd peak, sub-harmonic -- in bar order
@@ -365,7 +366,8 @@ def run_monitor(snapshots, band_frequencies, boundaries, devices=(), current_dev
             f"gate      {verdict}\n\n"
             f"command   {snapshot.drive.upper()}"
             f"{'  (steering)' if snapshot.steering else ''}\n"
-            f"sweep     {snapshot.sweep_cents:+.0f} cents\n"
+            f"motion    {snapshot.motion or '--'}\n"
+            f"slide     {snapshot.slide_rate:+.0f} cents/s\n"
             f"chirps    {snapshot.chirps}/3\n"
             f"level     {snapshot.level_db:6.1f} dB\n"
             f"floor     {snapshot.noise_floor_db:6.1f} dB\n\n"

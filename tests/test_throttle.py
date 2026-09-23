@@ -21,7 +21,8 @@ def mapper():
         ("C4", Drive.BACKWARD),        # the lowest note Jake can whistle
         ("A4", Drive.BACKWARD),
         ("F5", Drive.BACKWARD),
-        ("G5", Drive.FORWARD),
+        ("G5", Drive.BACKWARD),
+        ("C6", Drive.FORWARD),
         ("A5", Drive.FORWARD),
         ("A#6", Drive.FORWARD_FAST),
         ("D7", Drive.FORWARD_FAST),    # the "go fast" target note
@@ -62,7 +63,7 @@ def test_zone_order_is_validated():
 def test_a_pitch_sitting_on_a_boundary_does_not_chatter(mapper):
     """The failure this prevents: the car flipping between two commands several
     times a second while you hold a note near a zone edge."""
-    boundary = note_to_hz("F#5")
+    boundary = note_to_hz("A5")
     mapper.update(boundary * 0.97)
     assert mapper.current_drive is Drive.BACKWARD
 
@@ -72,7 +73,7 @@ def test_a_pitch_sitting_on_a_boundary_does_not_chatter(mapper):
 
 
 def test_a_decisive_move_past_the_boundary_does_switch(mapper):
-    boundary = note_to_hz("F#5")
+    boundary = note_to_hz("A5")
     mapper.update(boundary * 0.97)
     assert mapper.update(boundary * 1.10) is Drive.FORWARD
 
@@ -87,7 +88,7 @@ def test_hysteresis_applies_in_both_directions(mapper):
 
 def test_the_hysteresis_margin_is_honoured_exactly():
     mapper = ThrottleMapper(ThrottleConfig(hysteresis_cents=100.0))
-    boundary = note_to_hz("F#5")
+    boundary = note_to_hz("A5")
     mapper.update(boundary * 0.9)
 
     just_inside = boundary * 2 ** (99.0 / 1200.0)
@@ -98,6 +99,6 @@ def test_the_hysteresis_margin_is_honoured_exactly():
 
 def test_zero_hysteresis_switches_at_the_edge():
     mapper = ThrottleMapper(ThrottleConfig(hysteresis_cents=0.0))
-    boundary = note_to_hz("F#5")
+    boundary = note_to_hz("A5")
     assert mapper.update(boundary - 0.5) is Drive.BACKWARD
     assert mapper.update(boundary + 0.5) is Drive.FORWARD

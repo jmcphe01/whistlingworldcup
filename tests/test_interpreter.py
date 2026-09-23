@@ -55,7 +55,7 @@ def final(intents):
     "note, expected",
     [
         ("D7", Drive.FORWARD_FAST),
-        ("A5", Drive.FORWARD),
+        ("C6", Drive.FORWARD),
         ("C4", Drive.BACKWARD),
     ],
 )
@@ -64,21 +64,21 @@ def test_holding_a_note_drives(interpreter, note, expected):
 
 
 def test_silence_stops_the_car(interpreter):
-    intents = run(interpreter, hold(note_to_hz("A5"), 0.3) + silence(0.2))
+    intents = run(interpreter, hold(note_to_hz("C6"), 0.3) + silence(0.2))
     assert final(intents) is Drive.STOP
 
 
 def test_the_car_stops_the_moment_the_whistle_ends(interpreter):
     """Hold-to-drive: stopping must not wait for a timeout."""
-    frames = hold(note_to_hz("A5"), 0.3) + silence(0.2)
+    frames = hold(note_to_hz("C6"), 0.3) + silence(0.2)
     intents = run(interpreter, frames)
-    first_silent = len(hold(note_to_hz("A5"), 0.3))
+    first_silent = len(hold(note_to_hz("C6"), 0.3))
     assert intents[first_silent].drive is Drive.STOP
 
 
 def test_driving_starts_within_a_few_frames(interpreter):
     """Responsiveness: persistence costs frames, but only a handful."""
-    intents = run(interpreter, hold(note_to_hz("A5"), 0.5))
+    intents = run(interpreter, hold(note_to_hz("C6"), 0.5))
     moving = next(i for i, intent in enumerate(intents) if intent.drive is not Drive.STOP)
     assert moving * HOP < 0.06, "moving within 60 ms of the whistle starting"
 
@@ -107,7 +107,7 @@ def test_the_turn_outlives_the_whistle_that_asked_for_it(interpreter):
 
 
 def test_the_turn_eventually_releases(interpreter):
-    hold_seconds = Config().gestures.steer_hold_seconds
+    hold_seconds = Config().gestures.steer_release_seconds
     frames = (glide(note_to_hz("A4"), note_to_hz("A5"), 0.6)
               + silence(hold_seconds + 0.4))
     intents = run(interpreter, frames)
@@ -117,21 +117,21 @@ def test_the_turn_eventually_releases(interpreter):
 
 def test_a_held_note_never_steers(interpreter):
     """Driving forward is a held note; it must not turn."""
-    intents = run(interpreter, hold(note_to_hz("A5"), 3.0))
+    intents = run(interpreter, hold(note_to_hz("C6"), 3.0))
     assert not any(intent.drive.is_turn for intent in intents)
 
 
-def test_steering_reports_the_sweep_that_caused_it(interpreter):
+def test_steering_reports_the_slide_that_caused_it(interpreter):
     intents = run(interpreter, glide(note_to_hz("A4"), note_to_hz("A5"), 0.6))
     turning = [intent for intent in intents if intent.steering]
-    assert turning and turning[-1].sweep_cents > 0
+    assert turning and turning[-1].slide_rate > 0
 
 
 def test_throttle_resumes_after_a_turn(interpreter):
-    hold_seconds = Config().gestures.steer_hold_seconds
+    hold_seconds = Config().gestures.steer_release_seconds
     frames = (glide(note_to_hz("A4"), note_to_hz("A5"), 0.6)
               + silence(hold_seconds + 0.3)
-              + hold(note_to_hz("A5"), 0.3))
+              + hold(note_to_hz("C6"), 0.3))
     assert final(run(interpreter, frames)) is Drive.FORWARD
 
 
@@ -147,7 +147,7 @@ def test_three_high_chirps_claim_the_goal(interpreter):
 
 def test_ordinary_driving_never_claims_the_goal(interpreter):
     """The whole scheme, exercised at once: nothing you do to drive may score."""
-    frames = (hold(note_to_hz("A5"), 1.0) + silence(0.3)
+    frames = (hold(note_to_hz("C6"), 1.0) + silence(0.3)
               + hold(note_to_hz("D7"), 1.0) + silence(0.3)
               + hold(note_to_hz("C4"), 1.0) + silence(0.3)
               + glide(note_to_hz("A4"), note_to_hz("A6"), 1.2) + silence(0.3)
@@ -159,9 +159,9 @@ def test_ordinary_driving_never_claims_the_goal(interpreter):
 # --- reporting and housekeeping --------------------------------------------
 
 def test_the_intent_names_the_note_for_the_monitor(interpreter):
-    intents = run(interpreter, hold(note_to_hz("A5"), 0.3))
-    assert intents[-1].note == "A5"
-    assert intents[-1].frequency == pytest.approx(note_to_hz("A5"))
+    intents = run(interpreter, hold(note_to_hz("C6"), 0.3))
+    assert intents[-1].note == "C6"
+    assert intents[-1].frequency == pytest.approx(note_to_hz("C6"))
 
 
 def test_an_unvoiced_intent_reports_no_note(interpreter):

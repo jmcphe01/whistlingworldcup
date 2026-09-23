@@ -19,10 +19,10 @@ How it is put together, and why:
 
 The control scheme:
 
-  hold a note          C4-F#5 reverse, F#5-A6 forward, above A6 forward fast
+  hold a note steady   C4-A5 reverse, A5-A6 forward, above A6 forward fast
   stop whistling       stop
-  long rising sweep    pivot right
-  long falling sweep   pivot left
+  slide the pitch up   pivot right, for as long as you keep sliding
+  slide the pitch down pivot left
   three high chirps    claim the goal
 """
 
@@ -483,7 +483,8 @@ def push_snapshot(snapshots, now, reading, spectrum_db, intent, interpreter,
         steering=intent.steering,
         phase=match.phase.value,
         role=role.value,
-        sweep_cents=intent.sweep_cents or interpreter.sweeps.travel_cents,
+        slide_rate=intent.slide_rate or interpreter.motion.rate_cents,
+        motion=intent.motion.value,
         chirps=interpreter.chirps.chirps_so_far,
         gate_thresholds=detector.gate_thresholds,
         sensitivity=detector.sensitivity,

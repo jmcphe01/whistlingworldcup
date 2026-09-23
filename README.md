@@ -8,24 +8,31 @@ settle the match. See [`README`](README) for the assignment text.
 
 | Whistle | Car |
 |---|---|
-| hold a note, C4–F#5 | reverse |
-| hold a note, F#5–A6 | forward |
-| hold a note above A6 (D7 is the target) | forward, fast |
+| hold a note steady, C4-A5 | reverse |
+| hold a note steady, A5-A6 | forward |
+| hold a note steady above A6 (D7 is the target) | forward, fast |
 | stop whistling | stop |
-| long whistle rising significantly | pivot right |
-| long whistle falling significantly | pivot left |
+| slide the pitch up | pivot right, while you keep sliding |
+| slide the pitch down | pivot left |
 | three short high chirps (above A6) | claim the goal |
 
-Driving is hold-to-go: the car moves only while you are whistling, and stops the
-moment you stop. Zone edges are set as note names in [`config.py`](config.py) and
-compared in cents, so they land on musical intervals rather than Hz values.
+Throttle and steering are told apart by **how the pitch is moving, not where it
+sits**. A steady note is a throttle command; a sliding one is a steering command;
+they are mutually exclusive. That is why a slide never drives the car forward on
+its way up through the forward zone, and why holding a note never steers.
 
-Steering is a gesture rather than a zone because the zones are already spoken for
-by throttle. A sweep fires as soon as ~5 semitones of travel is confirmed, so the
-turn begins during the sweep rather than after it, and a longer sweep turns
-further. The turn is then latched for 0.7 s, because by the time a sweep has been
-recognised you have stopped whistling and the throttle has already fallen back to
-stop.
+Motion is measured as a least-squares slope over the last 0.3 s rather than the
+difference between the first and last samples. Endpoint difference is at the
+mercy of where the window lands: on a note with vibrato whose ends fall on
+opposite swings it reports a slide that is not there.
+
+Between "clearly steady" and "clearly sliding" there is a deliberate dead band
+where the car stops. An ambiguous whistle doing nothing beats it guessing.
+
+Driving is hold-to-go: the car moves only while you are whistling a steady note,
+and stops the moment you stop. Steering is live: you turn for exactly as long as
+you slide, so a longer slide turns further. Zone edges are set as note names in
+[`config.py`](config.py) and compared in cents.
 
 The goal command is three chirps rather than one extreme pitch on purpose: a
 false positive there ends the match, and a stray noise can produce one pitch but

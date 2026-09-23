@@ -96,7 +96,7 @@ class Rig:
 
 @pytest.mark.parametrize(
     "note, expected",
-    [("D7", Drive.FORWARD_FAST), ("A5", Drive.FORWARD), ("C4", Drive.BACKWARD)],
+    [("D7", Drive.FORWARD_FAST), ("C6", Drive.FORWARD), ("C4", Drive.BACKWARD)],
 )
 def test_whistling_a_note_drives_the_motors(note, expected):
     rig = Rig().feed(tone(note_to_hz(note), 0.5))
@@ -105,13 +105,13 @@ def test_whistling_a_note_drives_the_motors(note, expected):
 
 
 def test_the_motors_stop_when_the_whistle_stops():
-    rig = Rig().feed(np.concatenate([tone(note_to_hz("A5"), 0.5), quiet(0.4)]))
+    rig = Rig().feed(np.concatenate([tone(note_to_hz("C6"), 0.5), quiet(0.4)]))
     assert rig.final is Drive.STOP
     assert rig.tank_calls[-1] == (0, 0)
 
 
 def test_going_fast_really_is_faster():
-    forward = Rig().feed(tone(note_to_hz("A5"), 0.5)).tank_calls[-1]
+    forward = Rig().feed(tone(note_to_hz("C6"), 0.5)).tank_calls[-1]
     fast = Rig().feed(tone(note_to_hz("D7"), 0.5)).tank_calls[-1]
     assert fast[0] > forward[0]
 
@@ -122,7 +122,7 @@ def test_reverse_runs_the_tracks_backwards():
 
 def test_a_run_through_every_throttle_zone():
     rig = Rig().feed(np.concatenate([
-        tone(note_to_hz("A5"), 0.4), quiet(0.2),
+        tone(note_to_hz("C6"), 0.4), quiet(0.2),
         tone(note_to_hz("D7"), 0.4), quiet(0.2),
         tone(note_to_hz("C4"), 0.4), quiet(0.2),
     ]))
@@ -148,7 +148,7 @@ def test_a_real_falling_glide_steers_left():
 
 
 def test_a_steady_note_never_steers():
-    rig = Rig().feed(tone(note_to_hz("A5"), 2.0))
+    rig = Rig().feed(tone(note_to_hz("C6"), 2.0))
     assert not any(command.is_turn for command in rig.commands)
 
 
@@ -171,7 +171,7 @@ def test_a_whole_driving_session_never_claims_the_goal():
     """The strongest safety check in the suite: every drive and steer command,
     back to back, must not score."""
     rig = Rig().feed(np.concatenate([
-        tone(note_to_hz("A5"), 0.8), quiet(0.3),
+        tone(note_to_hz("C6"), 0.8), quiet(0.3),
         tone(note_to_hz("D7"), 0.8), quiet(0.3),
         tone(note_to_hz("C4"), 0.8), quiet(0.3),
         sweep(note_to_hz("A4"), note_to_hz("A6"), 1.0), quiet(0.3),
@@ -192,7 +192,7 @@ def test_a_noisy_room_alone_does_not_move_the_car():
 
 def test_a_whistle_over_a_noisy_room_still_drives():
     room = np.concatenate([babble(amplitude=0.22, seed=s, n=4096) for s in range(12)])
-    whistle = tone(note_to_hz("A5"), len(room) / SAMPLE_RATE, amplitude=0.28)
+    whistle = tone(note_to_hz("C6"), len(room) / SAMPLE_RATE, amplitude=0.28)
     rig = Rig(noise_floor_db=-70.0).feed(room + whistle)
     assert rig.final is Drive.FORWARD
 

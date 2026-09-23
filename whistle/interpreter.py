@@ -3,15 +3,15 @@
 This is the whole control scheme in one place, and it is pure: readings and a
 timestamp in, an Intent out. No audio, no robot, no clock of its own.
 
-    sustained pitch   ->  throttle (three zones; silence means stop)
-    rising sweep      ->  pivot right, latched briefly
-    falling sweep     ->  pivot left, latched briefly
+    pitch held steady ->  throttle (three zones; silence means stop)
+    pitch sliding up  ->  pivot right, for as long as the slide lasts
+    pitch sliding down->  pivot left, for as long as the slide lasts
     three high chirps ->  goal claimed
 
-A latched turn overrides the throttle. It has to: the sweep is only recognised
-once it is finished, and by then you have stopped whistling, so the throttle has
-already fallen back to STOP. Without the latch a turn would be cancelled in the
-same frame it was requested.
+Held and sliding are mutually exclusive, so the car never drives forward on a
+slide's way through the forward zone: you turn for exactly as long as you slide,
+and you drive only while the note is steady. The short release on a turn exists
+only to bridge a dropped frame, not to outlive the gesture.
 """
 
 from __future__ import annotations
@@ -20,7 +20,7 @@ from dataclasses import dataclass
 
 from config import Config
 from whistle.commands import Drive
-from whistle.gestures import RISING, ChirpSequenceDetector, SweepDetector
+from whistle.gestures import ChirpSequenceDetector, Motion, MotionClassifier
 from whistle.notes import describe
 from whistle.pitch import PitchReading, PitchTracker
 from whistle.throttle import ThrottleMapper
@@ -33,8 +33,9 @@ class Intent:
     drive: Drive
     frequency: float | None         # smoothed pitch, None when not whistling
     goal_whistle: bool              # the chirp sequence completed this frame
-    steering: bool = False          # drive came from a latched sweep
-    sweep_cents: float = 0.0        # net travel of the sweep that latched it
+    steering: bool = False          # drive came from a slide rather than a zone
+    slide_rate: float = 0.0         # signed cents per second of that slide
+    motion: Motion = Motion.SILENT  # what the pitch is doing, for the monitor
 
     @property
     def note(self) -> str | None:
@@ -46,21 +47,21 @@ class Interpreter:
         self.config = config or Config()
         self.tracker = PitchTracker(self.config.gates)
         self.throttle = ThrottleMapper(self.config.throttle)
-        self.sweeps = SweepDetector(self.config.gestures)
+        self.motion = MotionClassifier(self.config.gestures)
         self.chirps = ChirpSequenceDetector(self.config.gestures)
 
         self._steer: Drive | None = None
         self._steer_until = 0.0
-        self._steer_cents = 0.0
+        self._steer_rate = 0.0
 
     def reset(self) -> None:
         self.tracker.reset()
         self.throttle.reset()
-        self.sweeps.reset()
+        self.motion.reset()
         self.chirps.reset()
         self._steer = None
         self._steer_until = 0.0
-        self._steer_cents = 0.0
+        self._steer_rate = 0.0
 
     def update(self, now: float, reading: PitchReading) -> Intent:
         raw = reading.frequency if reading.voiced else None
@@ -69,20 +70,23 @@ class Interpreter:
         # Chirps read the raw pitch; see the note in gestures.py.
         goal = self.chirps.update(now, raw)
 
-        sweep = self.sweeps.update(now, smoothed)
-        if sweep is not None:
-            self._steer = Drive.TURN_RIGHT if sweep.direction == RISING else Drive.TURN_LEFT
-            self._steer_until = now + self.config.gestures.steer_hold_seconds
-            self._steer_cents = sweep.cents
+        motion = self.motion.update(now, smoothed)
+        if motion.motion.is_slide:
+            self._steer = (Drive.TURN_RIGHT if motion.motion is Motion.RISING
+                           else Drive.TURN_LEFT)
+            self._steer_until = now + self.config.gestures.steer_release_seconds
+            self._steer_rate = motion.rate_cents
 
-        # Keep the throttle mapper current even while a turn is latched, so it
-        # resumes from the pitch you are actually whistling when the turn ends.
-        throttle = self.throttle.update(smoothed)
+        # Throttle only applies to a steady note. Anything else clears the
+        # mapper, so the next held note is judged fresh rather than against a
+        # band left over from whatever the pitch was doing on the way there.
+        held = motion.motion is Motion.HELD
+        throttle = self.throttle.update(smoothed if held else None)
 
         if self._steer is not None and now < self._steer_until:
             return Intent(self._steer, smoothed, goal, steering=True,
-                          sweep_cents=self._steer_cents)
+                          slide_rate=self._steer_rate, motion=motion.motion)
 
         self._steer = None
-        self._steer_cents = 0.0
-        return Intent(throttle, smoothed, goal)
+        self._steer_rate = 0.0
+        return Intent(throttle, smoothed, goal, motion=motion.motion)
