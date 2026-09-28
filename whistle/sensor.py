@@ -129,6 +129,15 @@ class SensorMonitor:
         self._tripped.clear()
         self.watch.reset()
 
+    def readout(self) -> str:
+        """A short live reading for the monitor: what it sees against what trips it."""
+        if not self.armed:
+            return "off"
+        if self.watch.baseline is None:
+            return "taking baseline"
+        last = "no reading" if self.last_reflection is None else f"{self.last_reflection:.0f}"
+        return f"{last}  (trips at {self.watch.threshold:.0f})"
+
     def describe(self) -> str:
         if not self.armed:
             return "light sensor: not armed"

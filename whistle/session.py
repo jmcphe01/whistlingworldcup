@@ -52,6 +52,11 @@ class Session:
             self._announced = self.match.phase
             self._log(f"  phase: {self.match.phase.value}")
 
+    def light_readout(self) -> str:
+        if self.sensor is None:
+            return "not connected"
+        return self.sensor.readout()
+
     # --- the per-frame step --------------------------------------------------
 
     def step(self, now: float, intent) -> None:

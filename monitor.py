@@ -60,6 +60,7 @@ class Snapshot:
     goal_message: str = ""
     tagged_message: str = ""
     notice: str = ""            # the latest event, e.g. "received 'start'"
+    light: str = ""             # the light sensor: what it sees, and what trips it
     device: str = ""
     # noise margin, peak/median, peak/2nd peak, sub-harmonic -- in bar order
     gate_thresholds: tuple[float, float, float, float] = (10.0, 14.0, 8.0, 6.0)
@@ -500,7 +501,8 @@ def run_monitor(snapshots, band_frequencies, boundaries, devices=(), current_dev
             f"slide     {snapshot.slide_rate:+.0f} cents/s\n"
             f"goal      {snapshot.goal_pattern or '--'}  {snapshot.goal_progress}/{legs}\n"
             f"level     {snapshot.level_db:6.1f} dB\n"
-            f"floor     {snapshot.noise_floor_db:6.1f} dB"
+            f"floor     {snapshot.noise_floor_db:6.1f} dB\n"
+            f"light     {snapshot.light or '--'}"
         )
         readout.set_color(colour)
         notice.set_text(snapshot.notice[:110])
