@@ -148,21 +148,36 @@ What each ending does, for both roles:
 
 ### The couch
 
-A single motor that a partner spins by MQTT message: **couchleft**, **couchright**
-and **couchstop**. It connects with the same card as everything else, and the
-commands arrive on the same topic as the match messages.
+A single motor that a partner turns by MQTT message: **pivot[angle]**, for example
+`pivot[90]` or `pivot[-45]`. The motor turns by that many degrees, and a negative
+angle means the other direction. It connects with the same card as everything else,
+and the message arrives on the same topic as the match messages.
 
 It is independent of the match. It answers in either role, in any phase, before
 `start` and after the match is over, and starting, ending or resetting a match never
-touches it. The session recognises the three commands first, so they never reach the
-match rules. The motor runs until told to stop, so quitting the program stops it.
+touches it. The session recognises the message first, so it never reaches the match
+rules.
 
-`couch_left_speed` and `couch_right_speed` in `HardwareConfig` set the speed, and
-their sign is the direction: if left and right come out the wrong way round, swap the
-signs. The wording is `couch_*_message` in `MqttConfig`, and the game messages
-cannot be reworded to collide with it. If the motor fails to connect the program
-carries on with a warning, and `--no-couch` skips it. To test it alone, type
-`couchleft`, `couchright` or `couchstop` in the console.
+Only the bracketed form is claimed, with case and spaces ignored (`Pivot [ -45 ]`
+works). A bare `pivot` is not a couch message and goes to the match rules. Brackets
+with no readable number, like `pivot[abc]`, are reported rather than ignored. Angles
+are rounded to a whole degree, `pivot[0]` does nothing, and an angle past
+`couch_max_degrees` (3600, ten turns) is refused so a mistyped `pivot[9000000]` cannot
+spin the motor for minutes.
+
+The turn is started without waiting for it to finish. Waiting would stall the loop
+that listens for whistles, and the car would keep driving on its last command
+meanwhile. That also means a new pivot arriving mid-turn is sent straight away, and
+what the hub does with two overlapping turns is untested. The motor is stopped when
+the program exits, in case it is mid-turn.
+
+In `HardwareConfig`, `couch_speed` sets the speed (percent) and `couch_invert` flips
+which way a positive angle turns, if it comes out the wrong way for how the motor is
+mounted. The word is `pivot_message` in `MqttConfig`, and the game messages cannot be
+reworded to collide with it. If the motor fails to connect the program carries on with
+a warning, and `--no-couch` skips it. To test it alone, type `pivot 90` or `pivot -45`
+in the console: it publishes the exact `pivot[90]` form your partner would send, so
+the whole path is exercised.
 
 ### The songs
 

@@ -16,6 +16,7 @@ The commands split into two kinds, and the difference matters when testing:
 from __future__ import annotations
 
 import queue
+import re
 import threading
 
 HELP = """
@@ -25,7 +26,7 @@ Test commands (type one and press Return). You are the other team.
     start            publish the start message
     tagged           publish the tagged message   (a goalie sings on this)
     scored           publish the goal message     (a goalie mourns on this)
-    couchleft, couchright, couchstop   publish a couch command (as your partner would)
+    pivot <angle>    publish a couch command, e.g. pivot 90 or pivot -45
     send <text>      publish anything to the topic
 
   Simulated locally, no whistle or sensor needed:
@@ -42,7 +43,7 @@ Test commands (type one and press Return). You are the other team.
     help, quit
 """
 
-_OPPONENT = {"start", "tagged", "scored", "couchleft", "couchright", "couchstop"}
+_OPPONENT = {"start", "tagged", "scored"}
 _PLAIN = {"status", "help", "quit"}
 
 
@@ -54,6 +55,13 @@ def parse_console_line(line: str) -> tuple[str, object] | None:
     text = line.strip()
     if not text:
         return None
+
+    if text.lower().startswith("pivot"):
+        # Accept "pivot 90", "pivot -45", and the wire form "pivot[90]".
+        angle = re.fullmatch(r"pivot\s*\[?\s*([+-]?\d+(?:\.\d+)?)\s*\]?", text, re.IGNORECASE)
+        if angle is None:
+            raise ValueError("pivot needs an angle, e.g.  pivot 90  or  pivot -45")
+        return ("pivot", angle.group(1))
 
     word, _, rest = text.partition(" ")
     word = word.lower()

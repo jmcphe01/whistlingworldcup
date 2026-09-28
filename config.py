@@ -163,11 +163,10 @@ class MqttConfig:
     goal_message: str = "goal"          # the ball scored; the goalie hears this
     tagged_message: str = "tagged"      # the goalie reached the ball; the goalie hears this
 
-    # The couch commands, sent by a partner. They share the topic with the match
-    # messages and work in either role, at any time.
-    couch_left_message: str = "couchleft"
-    couch_right_message: str = "couchright"
-    couch_stop_message: str = "couchstop"
+    # The couch command, sent by a partner as pivot[<angle>], e.g. pivot[90] or
+    # pivot[-45]. It shares the topic with the match messages and works in either
+    # role, at any time.
+    pivot_message: str = "pivot"
 
 
 @dataclass(frozen=True)
@@ -183,11 +182,12 @@ class HardwareConfig:
     # the hardware's 2700 Hz limit. 0 plays them as written.
     beep_octave_shift: int = 1
 
-    # The couch motor. The sign is the direction, so if left and right come out
-    # the wrong way round, swap the signs.
+    # The couch motor. A positive angle turns clockwise and a negative one the other
+    # way; set couch_invert if that is the wrong way round for how it is mounted.
     couch_enabled: bool = True
-    couch_left_speed: int = -50
-    couch_right_speed: int = 50
+    couch_speed: int = 50
+    couch_invert: bool = False
+    couch_max_degrees: int = 3600       # ten turns; refuses a mistyped huge angle
 
 
 @dataclass(frozen=True)

@@ -91,12 +91,19 @@ class Session:
         self.say(f"received {payload!r}")
 
         # Couch commands are recognised first and never reach the match rules.
-        action = parse_command(payload, self.match.config)
-        if action is not None:
+        try:
+            angle = parse_command(payload, self.match.config)
+        except ValueError as error:
+            self.say(str(error))        # it was plainly meant for the couch
+            return
+        if angle is not None:
             if self.couch is None:
                 self.say("couch command ignored: no single motor is connected")
             else:
-                self.say(f"couch: {self.couch.execute(action)}")
+                try:
+                    self.say(f"couch: {self.couch.pivot(angle)}")
+                except ValueError as error:
+                    self.say(str(error))
             return
 
         self._run(self.match.on_message(payload))
@@ -171,8 +178,7 @@ class Session:
         config = self.match.config
         other = config.tagged_message if which == "goal" else config.goal_message
         taken = {word.strip().lower() for word in (
-            config.start_message, other, config.couch_left_message,
-            config.couch_right_message, config.couch_stop_message)}
+            config.start_message, other, config.pivot_message)}
         if message.lower() in taken:
             raise ValueError(f"{message!r} is already used for another message; "
                              "the two teams could not tell them apart")
@@ -194,10 +200,15 @@ class Session:
             "start": config.start_message,
             "tagged": config.tagged_message,
             "scored": config.goal_message,
-            "couchleft": config.couch_left_message,
-            "couchright": config.couch_right_message,
-            "couchstop": config.couch_stop_message,
         }[kind])
+
+    def _do_pivot(self, value) -> None:
+        """Publish a couch command, as the partner would: pivot[<angle>]."""
+        try:
+            float(value)
+        except (TypeError, ValueError):
+            raise ValueError(f"{value!r} is not an angle") from None
+        self._publish(f"{self.match.config.pivot_message}[{str(value).strip()}]")
 
     def _do_sim_goal(self, _value) -> None:
         self.say("simulating: the ball whistled the goal command")
