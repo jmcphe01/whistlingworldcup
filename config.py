@@ -136,6 +136,14 @@ class GestureConfig:
     goal_window: float = 2.5                # the whole pattern must fit in this
     goal_gap_timeout: float = 0.25          # silence this long abandons the attempt
 
+    # What makes a leg a whistled glide and not something else that changed pitch.
+    # Without these, any tone that merely jumps between pitches (a beeping device, a
+    # fan whine changing speed) counted, and scored for you.
+    goal_max_step_cents: float = 220.0      # a glide never jumps this far between frames
+    goal_min_leg_seconds: float = 0.04      # a leg takes time; a jump takes none
+    goal_min_leg_frames: int = 4            # and is seen over several frames
+    goal_min_over_floor_db: float = 20.0    # and is loud: well clear of the room's noise
+
 
 @dataclass(frozen=True)
 class SensorConfig:

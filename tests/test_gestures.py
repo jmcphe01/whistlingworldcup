@@ -7,6 +7,7 @@ with a 512-sample hop), so the frame counts here match the live stream.
 
 from __future__ import annotations
 
+import numpy as np
 import pytest
 
 from config import GestureConfig
@@ -285,3 +286,80 @@ def test_a_bad_pattern_in_config_is_refused_by_the_detector():
 
 def test_the_pattern_is_described_for_the_monitor():
     assert describe_pattern((DOWN, UP, DOWN)) == "left > right > left"
+
+
+# --- the warble must be a glide, not just a change of pitch ---------------------
+#
+# An earlier detector counted any 3.5-semitone change as a leg, jump or glide, so a
+# tone that merely jumped between pitches scored for you (238 times in 200 s).
+
+def hopping_tone(seconds, seed=0, dwell=(0.06, 0.25)):
+    """A steady tone that jumps to a new pitch every so often: a beeping device, a
+    fan whine changing speed. No slides, only steps."""
+    rng = np.random.default_rng(seed)
+    frames = []
+    while len(frames) * HOP < seconds:
+        pitch = float(np.exp(rng.uniform(np.log(300), np.log(3500))))
+        frames += [pitch] * max(1, int(rng.uniform(*dwell) / HOP))
+    return frames
+
+
+@pytest.mark.parametrize("seed", range(5))
+def test_a_tone_that_only_jumps_between_pitches_never_scores(seed):
+    assert play(GoalWhistleDetector(), hopping_tone(60.0, seed)) == []
+
+
+def test_a_different_random_pitch_every_frame_never_scores():
+    rng = np.random.default_rng(3)
+    frames = [float(np.exp(rng.uniform(np.log(300), np.log(3500)))) for _ in range(5000)]
+    assert play(GoalWhistleDetector(), frames) == []
+
+
+def test_one_jump_in_the_middle_of_a_warble_abandons_it():
+    frames = warble([DOWN, UP, DOWN])
+    middle = len(frames) // 2
+    frames[middle:] = [f * 2 ** (500 / 1200) for f in frames[middle:]]      # a 500 cent step
+    assert play(GoalWhistleDetector(), frames) == []
+
+
+def test_a_glide_is_not_mistaken_for_a_jump_at_the_fastest_realistic_speed():
+    """An octave per leg in 0.2 s is about as fast as anyone whistles."""
+    assert len(play(GoalWhistleDetector(), warble([DOWN, UP, DOWN], cents=1200, leg_seconds=0.2))) == 1
+
+
+def test_a_leg_must_be_seen_over_several_frames():
+    """With the step cap out of the way, three-frame legs still do not count."""
+    lax = GestureConfig(goal_max_step_cents=100000.0, goal_min_leg_seconds=0.0)
+    frames = warble([DOWN, UP, DOWN], cents=600.0, leg_seconds=3 * HOP)
+    assert play(GoalWhistleDetector(lax), frames) == []
+
+
+def test_a_leg_must_take_a_little_time():
+    lax = GestureConfig(goal_max_step_cents=100000.0, goal_min_leg_frames=1,
+                        goal_min_leg_seconds=0.5)
+    assert play(GoalWhistleDetector(lax), warble([DOWN, UP, DOWN], leg_seconds=0.3)) == []
+
+
+def test_a_long_steady_note_before_the_warble_does_not_spoil_it():
+    frames = hold(note_to_hz("A5"), 5.0) + warble([DOWN, UP, DOWN])
+    assert len(play(GoalWhistleDetector(), frames)) == 1
+
+
+def test_a_warble_survives_a_dropped_frame_or_two():
+    frames = warble([DOWN, UP, DOWN])
+    frames[20] = frames[21] = None
+    assert len(play(GoalWhistleDetector(), frames)) == 1
+
+
+def test_a_completed_warble_describes_itself():
+    """So a score nobody meant can be explained afterwards."""
+    detector = GoalWhistleDetector()
+    play(detector, warble([DOWN, UP, DOWN]))
+    assert detector.last_fire.count("cents") == 3
+    assert "left" in detector.last_fire and "right" in detector.last_fire
+
+
+def test_the_description_survives_the_reset_that_follows_a_score():
+    detector = GoalWhistleDetector()
+    play(detector, warble([DOWN, UP, DOWN]))
+    assert detector.last_fire != "" and detector.legs_matched == 0

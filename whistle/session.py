@@ -68,6 +68,11 @@ class Session:
         """One analysis frame: sensor, then goal, then throttle."""
         self._poll_sensor()
 
+        if intent.goal_whistle:
+            # Said even when it is ignored (no match running), so a warble that
+            # nobody meant to whistle can be seen and explained.
+            self.say(f"goal whistle heard: {intent.goal_detail}")
+
         if self.match.running and intent.goal_whistle:
             self._run(self.match.on_goal_whistle())
         elif self.match.running:
@@ -106,7 +111,12 @@ class Session:
                     self.say(str(error))
             return
 
+        before = self.match.phase
         self._run(self.match.on_message(payload))
+        if before is Phase.WAITING and self.match.phase is Phase.RUNNING:
+            # Whatever was heard before the start must not count towards a warble
+            # that completes just after it.
+            self.interpreter.reset()
         self._announce_phase()
 
     # --- match lifecycle -----------------------------------------------------

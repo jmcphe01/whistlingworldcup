@@ -181,3 +181,44 @@ def test_rejected_frames_are_treated_as_silence(interpreter):
         intent = interpreter.update(i * HOP, noisy)
     assert intent.drive is Drive.STOP
     assert intent.frequency is None
+
+
+# --- only a loud whistle can be the goal command ---------------------------------
+
+def run_warble(interpreter, over_floor_db):
+    from tests.test_gestures import warble
+
+    intents = [
+        interpreter.update(i * HOP, reading(f, level_db=-60.0 + over_floor_db,
+                                            noise_floor_db=-60.0))
+        for i, f in enumerate(warble([-1, 1, -1]))
+    ]
+    return [intent for intent in intents if intent.goal_whistle]
+
+
+def test_a_loud_warble_scores(interpreter):
+    assert len(run_warble(interpreter, 35.0)) == 1
+
+
+def test_the_same_warble_barely_above_the_room_noise_does_not(interpreter):
+    """A frame that only just clears the detection gates is what a beeping device
+    looks like; the command ends the match, so it has to be a real whistle."""
+    assert run_warble(interpreter, 8.0) == []
+
+
+def test_the_loudness_needed_is_configurable():
+    from dataclasses import replace
+
+    config = Config()
+    quiet_ok = replace(config, gestures=replace(config.gestures, goal_min_over_floor_db=5.0))
+    assert len(run_warble(Interpreter(quiet_ok), 8.0)) == 1
+
+
+def test_a_score_says_what_it_heard(interpreter):
+    (intent,) = run_warble(interpreter, 35.0)
+    assert "left" in intent.goal_detail and "dB over the room's noise" in intent.goal_detail
+
+
+def test_no_detail_is_reported_when_nothing_fired(interpreter):
+    intents = run(interpreter, hold(note_to_hz("C6"), 0.5))
+    assert all(intent.goal_detail == "" for intent in intents)

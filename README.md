@@ -46,6 +46,25 @@ about 3.5 semitones, so vibrato is invisible to it, and it counts a leg as soon 
 it has travelled far enough rather than when it ends, since the last leg has no
 reversal after it to wait for.
 
+A leg has to be a *glide*, and only a loud whistle counts. An earlier version
+counted any 3.5-semitone change of pitch as a leg, so a tone that merely jumped
+between pitches (a beeping device, a fan whine changing speed) scored for you: 238
+times in 200 seconds of simulated jumping. Now a step between frames of more than
+`goal_max_step_cents` abandons the attempt, a leg must take `goal_min_leg_seconds`
+and be seen over `goal_min_leg_frames` frames, and frames must be
+`goal_min_over_floor_db` (20 dB) above the room's noise, since the frames that only
+just clear the detection gates are exactly what such a device looks like. Whatever
+was heard before `start` is discarded when the match starts.
+
+When it fires, the terminal prints what it heard, for example `goal whistle heard:
+left 520 cents in 0.31s, right 610 cents in 0.28s, left 480 cents in 0.26s; 34 dB
+over the room's noise`, and it does so even when no match is running, so a warble
+nobody meant can be explained. The `goal` line in the monitor shows the legs
+accumulating live.
+
+One thing it cannot do: a slow, smooth, loud, siren-like wobble looks exactly like a
+warble, because it is one. Loudness and a longer `goal_pattern` are the only defences.
+
 It uses the same slides as steering, so the car will pivot left, right, left as
 you whistle it; that is harmless, because scoring stops the car. What keeps
 ordinary steering from scoring by accident is that the warble must be one
