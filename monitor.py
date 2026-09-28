@@ -8,7 +8,8 @@ car keeps driving.
 Four panels and a control strip:
 
   spectrum     the search band, with the detected peak and the zone edges marked
-  pitch track  the last few seconds against the throttle zones as coloured bands
+  spectrogram  the last few seconds of the spectrum, with the throttle zone edges
+               marked and the detected pitch drawn over it
   gates        level against the measured noise floor, and each shape gate
   readout      note, cents, command, match phase, goal-whistle progress
   controls     role, topic, microphone, sensitivity and a new-match button
@@ -25,6 +26,12 @@ import numpy as np
 
 TRACK_SECONDS = 6.0
 MONITOR_BINS = 400
+
+# The spectrogram is redrawn about 25 times a second, so it is kept coarse: 128
+# frequency rows by 120 time columns is ~15,000 cells, which redraws in a few
+# milliseconds. Rows are max-pooled, so a narrow whistle stays as bright as it is.
+SPECTROGRAM_BINS = 128
+SPECTROGRAM_COLUMNS = 120
 
 ZONE_COLOURS = {
     "backward": "#6a8fd8",
@@ -92,6 +99,86 @@ def pool_centres(axis: np.ndarray, bins: int) -> np.ndarray:
 
     edges = np.linspace(0, axis.size, bins + 1).astype(int)
     return np.array([axis[a:b].mean() for a, b in zip(edges, edges[1:]) if b > a])
+
+
+class SpectrogramHistory:
+    """The last few seconds of spectrum columns, resampled onto a fixed time grid.
+
+    Snapshots arrive at whatever rate the audio loop manages, so columns are kept
+    with their timestamps and laid onto evenly spaced slots afterwards. Drawing a
+    column per snapshot instead would stretch or squash time whenever the rate
+    wobbled, and a whistle's slope on the display is exactly what you read.
+    """
+
+    def __init__(self, seconds: float = TRACK_SECONDS, columns: int = SPECTROGRAM_COLUMNS):
+        self.seconds = seconds
+        self.columns = columns
+        self._times: list[float] = []
+        self._data: list[np.ndarray] = []
+
+    def add(self, t: float, column: np.ndarray) -> bool:
+        """Record a column. Repeats of the same instant are ignored, because the
+        display redraws more often than snapshots arrive. True if it was new."""
+        if self._times and t <= self._times[-1]:
+            return False
+        self._times.append(t)
+        self._data.append(np.asarray(column, dtype=np.float64))
+
+        cutoff = t - self.seconds
+        keep = next((i for i, when in enumerate(self._times) if when >= cutoff), 0)
+        if keep > 1:                 # keep one column older than the window, so the
+            del self._times[:keep - 1]   # leftmost slot has something to show
+            del self._data[:keep - 1]
+        return True
+
+    def frame(self, now: float, rows: int) -> np.ndarray:
+        """A (rows, columns) array, oldest on the left. Slots with no data yet are
+        NaN, so the caller decides what "nothing" looks like."""
+        out = np.full((rows, self.columns), np.nan)
+        if not self._times:
+            return out
+
+        slots = np.linspace(now - self.seconds, now, self.columns)
+        times = np.asarray(self._times)
+        for slot, index in enumerate(np.searchsorted(times, slots, side="right") - 1):
+            if index >= 0:
+                out[:, slot] = self._data[index]
+        return out
+
+
+class SpectrogramScale:
+    """Colour limits that follow the signal without flickering.
+
+    A fixed range would be wrong for every room and every microphone, and limits
+    recomputed from each frame jump about. So: the background is the lower
+    quartile and the top is a high percentile (never less than `span_db` above the
+    background, so a silent room does not stretch noise up to full brightness), and
+    both are smoothed.
+    """
+
+    def __init__(self, smoothing: float = 0.15, span_db: float = 30.0, max_range_db: float = 80.0):
+        self.smoothing = smoothing
+        self.span_db = span_db
+        self.max_range_db = max_range_db
+        self.vmin: float | None = None
+        self.vmax: float | None = None
+
+    def update(self, frame: np.ndarray) -> tuple[float, float]:
+        valid = frame[np.isfinite(frame)]
+        if valid.size == 0:
+            return (0.0, 1.0) if self.vmin is None else (self.vmin, self.vmax)
+
+        low = float(np.percentile(valid, 25))
+        high = max(float(np.percentile(valid, 99.8)), low + self.span_db)
+        low = max(low, high - self.max_range_db)
+
+        if self.vmin is None:
+            self.vmin, self.vmax = low, high
+        else:
+            a = self.smoothing
+            self.vmin += a * (low - self.vmin)
+            self.vmax += a * (high - self.vmax)
+        return self.vmin, self.vmax
 
 
 @dataclass
@@ -262,6 +349,7 @@ def run_monitor(snapshots, band_frequencies, boundaries, devices=(), current_dev
                 title="Whistling World Cup"):
     """Process entry point. Reads snapshots until it receives None."""
     import matplotlib.pyplot as plt
+    from matplotlib import patheffects
     from matplotlib.animation import FuncAnimation
     from matplotlib.widgets import Button, Slider, TextBox
 
@@ -305,21 +393,34 @@ def run_monitor(snapshots, band_frequencies, boundaries, devices=(), current_dev
     for edge in (backward_top, forward_top):
         spectrum_ax.axvline(edge, color="0.6", ls="--", lw=0.8)
 
-    # --- pitch track ---
-    (track_line,) = track_ax.plot([], [], lw=1.8, color="crimson")
+    # --- spectrogram, with the zone edges and the detected pitch over it ---
+    spectrogram_axis = pool_centres(np.asarray(band_frequencies), SPECTROGRAM_BINS)
+    spectrogram = SpectrogramHistory()
+    spectrogram_scale = SpectrogramScale()
+    slot_times = np.linspace(-TRACK_SECONDS, 0, SPECTROGRAM_COLUMNS)
+    mesh = track_ax.pcolormesh(
+        slot_times, spectrogram_axis,
+        np.zeros((spectrogram_axis.size, SPECTROGRAM_COLUMNS)),
+        shading="nearest", cmap="magma", vmin=0.0, vmax=1.0, zorder=1)
+    # Outlined in black: a whistle is a bright ridge in the spectrogram, and a thin
+    # coloured line on top of it disappears without something to set it apart.
+    (track_line,) = track_ax.plot(
+        [], [], lw=1.4, color="#4fd1ff", zorder=3,
+        path_effects=[patheffects.withStroke(linewidth=3.2, foreground="black")])
     track_ax.set_yscale("log")
     track_ax.set_ylim(axis[0], axis[-1])
     track_ax.set_xlim(-TRACK_SECONDS, 0)
-    track_ax.set_title("pitch, last %.0f s" % TRACK_SECONDS)
+    track_ax.set_title("spectrogram, last %.0f s" % TRACK_SECONDS)
     track_ax.set_xlabel("seconds ago")
     track_ax.set_ylabel("Hz")
-    track_ax.axhspan(axis[0], backward_top, color=ZONE_COLOURS["backward"], alpha=0.22)
-    track_ax.axhspan(backward_top, forward_top, color=ZONE_COLOURS["forward"], alpha=0.22)
-    track_ax.axhspan(forward_top, axis[-1], color=ZONE_COLOURS["forward fast"], alpha=0.22)
+    # The zone edges stay as they were; only the coloured fills are gone.
+    for edge in (backward_top, forward_top):
+        track_ax.axhline(edge, color="white", ls="--", lw=1.0, alpha=0.85, zorder=2)
     for label, position in (("backward", axis[0] * 1.15),
                             ("forward", backward_top * 1.15),
                             ("fast", forward_top * 1.15)):
-        track_ax.text(-TRACK_SECONDS * 0.98, position, label, fontsize=8, color="0.25")
+        track_ax.text(-TRACK_SECONDS * 0.98, position, label, fontsize=8, color="white",
+                      zorder=4)
 
     # --- gates ---
     gate_names = ["level over floor", "peak / median", "peak / 2nd peak", "sub-harmonic"]
@@ -459,6 +560,12 @@ def run_monitor(snapshots, band_frequencies, boundaries, devices=(), current_dev
         history.add(snapshot.t, snapshot.frequency)
         now = history.times[-1]
         track_line.set_data([t - now for t in history.times], history.pitches)
+
+        spectrogram.add(snapshot.t, pool_max(snapshot.spectrum_db, SPECTROGRAM_BINS))
+        grid = spectrogram.frame(snapshot.t, spectrogram_axis.size)
+        vmin, vmax = spectrogram_scale.update(grid)
+        mesh.set_array(np.where(np.isfinite(grid), grid, vmin))    # no data yet = darkest
+        mesh.set_clim(vmin, vmax)
 
         over_floor = snapshot.level_db - snapshot.noise_floor_db
         values = [over_floor, snapshot.peak_to_median_db, snapshot.peak_to_second_db,

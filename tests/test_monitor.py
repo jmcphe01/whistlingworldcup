@@ -89,3 +89,103 @@ def test_a_snapshot_survives_pickling():
     restored = pickle.loads(pickle.dumps(snapshot))
     assert restored.note == "A5"
     assert np.array_equal(restored.spectrum_db, snapshot.spectrum_db)
+
+
+# --- the spectrogram ----------------------------------------------------------
+
+from monitor import SpectrogramHistory, SpectrogramScale  # noqa: E402
+
+
+def column(value, rows=4):
+    return np.full(rows, float(value))
+
+
+def test_a_new_history_has_nothing_to_show():
+    assert np.isnan(SpectrogramHistory(seconds=2.0, columns=10).frame(0.0, 4)).all()
+
+
+def test_the_frame_is_rows_by_columns():
+    history = SpectrogramHistory(seconds=2.0, columns=10)
+    history.add(0.0, column(1))
+    assert history.frame(0.0, 4).shape == (4, 10)
+
+
+def test_the_newest_column_is_on_the_right():
+    history = SpectrogramHistory(seconds=2.0, columns=10)
+    for step in range(21):
+        history.add(step * 0.1, column(step))
+    frame = history.frame(2.0, 4)
+    assert frame[0, -1] == 20 and frame[0, 0] < frame[0, -1]
+
+
+def test_time_is_laid_out_evenly_whatever_the_snapshot_rate():
+    """A whistle's slope on the display is what you read, so a wobbling snapshot
+    rate must not stretch or squash it."""
+    history = SpectrogramHistory(seconds=1.0, columns=5)
+    for t in (0.0, 0.05, 0.1, 0.6, 1.0):          # uneven gaps
+        history.add(t, column(t, rows=1))
+    frame = history.frame(1.0, 1)[0]
+    assert list(frame) == [0.0, 0.1, 0.1, 0.6, 1.0]
+
+
+def test_slots_before_the_first_column_are_nan():
+    history = SpectrogramHistory(seconds=2.0, columns=8)
+    history.add(1.5, column(7))
+    frame = history.frame(2.0, 4)
+    assert np.isnan(frame[:, 0]).all() and frame[0, -1] == 7
+
+
+def test_a_repeated_instant_is_ignored():
+    """The display redraws more often than snapshots arrive."""
+    history = SpectrogramHistory(seconds=2.0, columns=10)
+    assert history.add(1.0, column(1)) is True
+    assert history.add(1.0, column(2)) is False
+    assert history.add(0.5, column(3)) is False
+
+
+def test_old_columns_are_dropped():
+    history = SpectrogramHistory(seconds=1.0, columns=10)
+    for step in range(200):
+        history.add(step * 0.1, column(step))
+    assert len(history._times) < 20
+
+
+def test_the_scale_puts_the_background_low_and_the_whistle_high():
+    frame = np.full((50, 50), 10.0)
+    frame[20, :] = 70.0
+    low, high = SpectrogramScale().update(frame)
+    assert low == pytest.approx(10.0) and high == pytest.approx(70.0)
+
+
+def test_a_silent_room_is_not_stretched_to_full_brightness():
+    """Noise alone must stay dark, so the top is never less than span_db above the
+    background."""
+    rng = np.random.default_rng(0)
+    frame = 10.0 + rng.standard_normal((50, 50))
+    low, high = SpectrogramScale(span_db=30.0).update(frame)
+    assert high - low >= 30.0
+
+
+def test_the_range_is_capped():
+    frame = np.full((10, 10), -240.0)
+    frame[0, 0] = 60.0
+    scale = SpectrogramScale(max_range_db=80.0)
+    low, high = scale.update(frame)
+    assert high - low <= 80.0 + 1e-9
+
+
+def test_the_limits_are_smoothed_rather_than_jumping():
+    scale = SpectrogramScale(smoothing=0.1)
+    scale.update(np.full((10, 10), 10.0))
+    _, before = scale.vmin, scale.vmax
+    loud = np.full((10, 10), 10.0)
+    loud[0, :] = 90.0
+    _, after = scale.update(loud)
+    assert before < after < 90.0
+
+
+def test_an_empty_frame_leaves_the_limits_alone():
+    scale = SpectrogramScale()
+    scale.update(np.full((5, 5), 20.0))
+    kept = (scale.vmin, scale.vmax)
+    assert scale.update(np.full((5, 5), np.nan)) == kept

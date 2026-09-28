@@ -205,6 +205,18 @@ Publishes go out at QoS 1 and the client resubscribes after a reconnect, because
 venue Wi-Fi drops connections and a message sent while the link is down would
 otherwise be lost, or the car would stay connected but deaf.
 
+## The monitor
+
+Four panels and a control strip. The **spectrogram** (top right) is the last six
+seconds of the spectrum, oldest on the left, on the same log frequency axis as the
+spectrum beside it: a held note is a horizontal bar, a slide is a diagonal, and a
+silence is dark. The throttle zone edges are the dashed lines, and the pitch the
+detector actually settled on is the outlined line drawn over it, so you can see
+where the two disagree (a bright ridge with no line is a whistle the gates
+rejected, and the `gate` line in the readout says which gate). The colour scale
+follows the signal, with the background near the room's own level, and is smoothed
+so it does not flicker.
+
 ## How noise rejection works
 
 A loud room is the main threat to this project, so the gates are layered, and the
