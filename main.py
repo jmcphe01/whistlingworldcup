@@ -55,7 +55,7 @@ from whistle.match import Match, MatchRunner, Role
 from whistle.pitch import PitchDetector, measure_noise_floor
 from whistle.sensor import SensorMonitor
 from whistle.session import Session
-from whistle.songs import SongPlayer
+from whistle.songs import BeepPlayer, SongPlayer
 from whistle.stream import (
     AudioStream,
     SilentInputError,
@@ -219,6 +219,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
                              "at once")
     parser.add_argument("--no-sensor", action="store_true",
                         help="skip the light sensor (the ball needs it to be tagged)")
+    parser.add_argument("--speaker", action="store_true",
+                        help="play the songs on the laptop speaker, not the robot's beeper")
     parser.add_argument("--no-console", action="store_true",
                         help="do not read typed test commands")
     return parser
@@ -250,13 +252,20 @@ def main(argv: list[str] | None = None) -> int:
                              config.gates)
     interpreter = Interpreter(config)
     match = Match(role, config.mqtt)
-    player = SongPlayer(config.audio.sample_rate)
 
     print(f"Whistling World Cup -- starting as the {role.value} "
           "(change it in the monitor, or type `role goalie`)")
 
     robot = NullRobot() if args.no_robot else connect_robot(config)
     driver = RobotDriver(robot, config.throttle)
+
+    # The songs play on the robot's own beeper, so they are audible wherever the
+    # robot is. The laptop speaker is for a desk test with no robot, or on request.
+    if args.no_robot or args.speaker:
+        print("Songs will play on the laptop speaker.")
+        player = SongPlayer(config.audio.sample_rate)
+    else:
+        player = BeepPlayer(robot, config.hardware.beep_sustain_seconds)
 
     # The sensor is connected for both roles, because the role can change while
     # the program runs. Only the ball ever arms it.

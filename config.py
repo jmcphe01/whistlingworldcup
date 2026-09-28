@@ -164,6 +164,9 @@ class HardwareConfig:
     card_color: str = "red"
     card_serial: int = 1129
     use_color_sensor: bool = True
+    # How often a held note is re-beeped. The hub's beep has no duration, so a
+    # long note is a run of beeps; tune this by ear with `song win` / `song lose`.
+    beep_sustain_seconds: float = 0.3
 
 
 @dataclass(frozen=True)

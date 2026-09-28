@@ -141,6 +141,20 @@ What each ending does, for both roles:
 | ball scores | publishes scored, winning song | hears scored, death song |
 | ball tagged | publishes tagged, death song, stops | hears tagged, winning song |
 
+### The songs
+
+They play on the robot's own beeper, so they are audible wherever the robot is
+(`--speaker` plays them on the laptop instead, and `--no-robot` does so
+automatically). The winning song is the hook of the Rick Astley chorus, transcribed
+by ear in C major (only its first two lines, with an approximate rhythm). The losing
+song is four descending half steps with the last held: womp womp womp womp.
+
+`beep()` takes a frequency (0-2700 Hz) but no duration, so a note's length comes from
+timing: start the beep without waiting, sleep, then `stop_beep()`. A held note is a
+run of beeps restarted every `beep_sustain_seconds` (in `HardwareConfig`, 0.3 by
+default). If held notes stutter, raise it; if you hear clicks mid-note, lower it.
+`song win` and `song lose` in the console play them on demand for tuning.
+
 Publishes go out at QoS 1 and the client resubscribes after a reconnect, because
 venue Wi-Fi drops connections and a message sent while the link is down would
 otherwise be lost, or the car would stay connected but deaf.

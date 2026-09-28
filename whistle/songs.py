@@ -12,10 +12,13 @@ speaker is louder than the note.
 from __future__ import annotations
 
 import os
+import time
 from dataclasses import dataclass
 from enum import Enum
 
 import numpy as np
+
+from legoeducation import SOUND_PATTERN_BEEP_SINGLE
 
 from whistle.notes import note_to_hz
 
@@ -40,16 +43,27 @@ class Song(Enum):
     VICTORY = "victory"
 
 
-# A slow descending minor line, and a rising fanfare. Both deliberately short:
-# nobody wants to wait four seconds to find out who won.
+# The winning song is the hook of the Rick Astley chorus, transcribed by ear in C
+# major (as scale degrees 1 2 4 2 6 6 5, then 1 2 4 2 5 5 4), so that every note
+# sits inside the beeper's 0-2700 Hz range. Only its first two lines are here: they
+# are the part everyone recognises, and the rhythm is approximate. The losing song
+# is the classic "womp womp womp womp": four notes, each a half step below the last,
+# with the final one held.
+_EIGHTH = 0.22
+
 MELODIES: dict[Song, tuple[Note, ...]] = {
-    Song.DEATH: (
-        Note("A4", 0.22), Note("G#4", 0.22), Note("G4", 0.22), Note("F#4", 0.22),
-        Note(None, 0.06), Note("F4", 0.30), Note("D4", 0.70),
-    ),
     Song.VICTORY: (
-        Note("C5", 0.13), Note("E5", 0.13), Note("G5", 0.13), Note("C6", 0.34),
-        Note(None, 0.05), Note("G5", 0.13), Note("C6", 0.55),
+        Note("C5", _EIGHTH), Note("D5", _EIGHTH), Note("F5", _EIGHTH), Note("D5", _EIGHTH),
+        Note("A5", 2 * _EIGHTH), Note("A5", _EIGHTH), Note("G5", 3 * _EIGHTH),
+        Note(None, _EIGHTH),
+        Note("C5", _EIGHTH), Note("D5", _EIGHTH), Note("F5", _EIGHTH), Note("D5", _EIGHTH),
+        Note("G5", 2 * _EIGHTH), Note("G5", _EIGHTH), Note("F5", 3 * _EIGHTH),
+    ),
+    Song.DEATH: (
+        Note("Bb5", 0.35), Note(None, 0.05),
+        Note("A5", 0.35), Note(None, 0.05),
+        Note("Ab5", 0.35), Note(None, 0.05),
+        Note("G5", 1.0),
     ),
 }
 
@@ -97,6 +111,64 @@ def render_song(song: Song, sample_rate: int = DEFAULT_SAMPLE_RATE,
 
 def duration(melody) -> float:
     return sum(note.seconds for note in melody)
+
+
+class BeepPlayer:
+    """Plays the songs on the robot's own beeper.
+
+    `beep()` takes a frequency and a pattern but no duration, so a note's length
+    has to come from timing: start the beep without waiting, sleep for the note,
+    then `stop_beep()`. A note longer than one beep is kept sounding by starting
+    another every `sustain_seconds`; if the hub's beep is longer than that the
+    restart is inaudible, and if it is shorter the note stutters. That value is
+    the thing to tune by ear, and `song win` / `song lose` in the console play a
+    song on demand for exactly that.
+
+    A Bluetooth hiccup must never crash the end of a match, so a failed beep is
+    counted and skipped rather than raised.
+    """
+
+    MAX_HZ = 2700       # the hardware's limit
+
+    def __init__(self, robot, sustain_seconds: float = 0.3, sleep=time.sleep,
+                 log=print):
+        self.robot = robot
+        self.sustain_seconds = sustain_seconds
+        self._sleep = sleep
+        self._log = log
+        self.failures = 0
+
+    def play(self, song: Song, wait: bool = True) -> float:
+        melody = MELODIES[song]
+        for note in melody:
+            self._play_note(note)
+        return duration(melody)
+
+    def _play_note(self, note: Note) -> None:
+        if note.frequency is None:
+            self._sleep(note.seconds)
+            return
+
+        hz = min(self.MAX_HZ, int(round(note.frequency)))
+        remaining = note.seconds
+        while remaining > 1e-9:
+            self._call("beep", pattern=SOUND_PATTERN_BEEP_SINGLE, frequency=hz,
+                       blocking=False)
+            step = min(self.sustain_seconds, remaining)
+            self._sleep(step)
+            remaining -= step
+        self._call("stop_beep", blocking=False)
+
+    def _call(self, method: str, **kwargs) -> None:
+        try:
+            getattr(self.robot, method)(**kwargs)
+        except Exception as error:
+            self.failures += 1
+            if self.failures == 1:
+                self._log(f"  [beeper] {method} failed: {error}")
+
+    def close(self) -> None:
+        pass
 
 
 class SongPlayer:
