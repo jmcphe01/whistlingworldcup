@@ -137,10 +137,39 @@ def test_throttle_resumes_after_a_turn(interpreter):
 
 # --- the goal whistle -------------------------------------------------------
 
-def test_a_left_right_left_warble_claims_the_goal(interpreter):
+def humps(start_hz=None):
+    """Three humps, kept up in the forward and fast zones."""
     from tests.test_gestures import warble
 
-    intents = run(interpreter, warble([-1, 1, -1]))
+    return warble([1, -1] * 3, start_hz=start_hz or note_to_hz("C6"))
+
+
+def test_three_humps_claim_the_goal(interpreter):
+    intents = run(interpreter, humps())
+    assert sum(1 for intent in intents if intent.goal_whistle) == 1
+
+
+def test_the_same_humps_below_the_reverse_ceiling_do_not(interpreter):
+    """Only the forward and fast zones count, so a voice or a low hum cannot add up
+    to a score."""
+    intents = run(interpreter, humps(start_hz=note_to_hz("C4")))
+    assert not any(intent.goal_whistle for intent in intents)
+
+
+def test_the_region_can_be_switched_off():
+    from dataclasses import replace
+
+    config = Config()
+    open_ = replace(config, gestures=replace(config.gestures, goal_floor_margin_cents=None))
+    intents = run(Interpreter(open_), humps(start_hz=note_to_hz("C4")))
+    assert sum(1 for intent in intents if intent.goal_whistle) == 1
+
+
+def test_a_dip_just_under_the_ceiling_is_forgiven(interpreter):
+    """The floor sits 150 cents under the reverse ceiling, so a trough that sags a
+    little below it does not break the warble."""
+    ceiling = note_to_hz(Config().throttle.backward_top)
+    intents = run(interpreter, humps(start_hz=ceiling * 2 ** (-100 / 1200)))
     assert sum(1 for intent in intents if intent.goal_whistle) == 1
 
 

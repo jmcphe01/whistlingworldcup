@@ -161,6 +161,10 @@ def test_the_thresholds_are_configurable():
 
 DOWN, UP = -1, 1
 
+# Most of these tests are about the detector in general, not the shipped default, so
+# they use a plain left-right-left and stay meaningful whatever the default becomes.
+LRL = GestureConfig(goal_pattern=("left", "right", "left"))
+
 
 def warble(directions, cents=600.0, leg_seconds=0.3, start_hz=None, hop=HOP):
     """One unbroken whistle made of legs, each falling (-1) or rising (+1)."""
@@ -176,64 +180,64 @@ def warble(directions, cents=600.0, leg_seconds=0.3, start_hz=None, hop=HOP):
 
 
 def test_left_right_left_claims_the_goal():
-    assert len(play(GoalWhistleDetector(), warble([DOWN, UP, DOWN]))) == 1
+    assert len(play(GoalWhistleDetector(LRL), warble([DOWN, UP, DOWN]))) == 1
 
 
 def test_it_fires_when_the_last_leg_has_travelled_far_enough_not_after_it_ends():
     """The final leg has no reversal after it, so waiting for one would mean the
     goal was never claimed."""
     frames = warble([DOWN, UP, DOWN])
-    when, _ = play(GoalWhistleDetector(), frames)[0]
+    when, _ = play(GoalWhistleDetector(LRL), frames)[0]
     assert when < (len(frames) - 1) * HOP
 
 
 def test_extra_legs_before_the_pattern_do_not_matter():
-    assert len(play(GoalWhistleDetector(), warble([UP, DOWN, UP, DOWN]))) == 1
+    assert len(play(GoalWhistleDetector(LRL), warble([UP, DOWN, UP, DOWN]))) == 1
 
 
 def test_the_wrong_order_does_not_claim_the_goal():
-    assert play(GoalWhistleDetector(), warble([UP, DOWN, UP])) == []
+    assert play(GoalWhistleDetector(LRL), warble([UP, DOWN, UP])) == []
 
 
 def test_two_legs_are_not_enough():
-    assert play(GoalWhistleDetector(), warble([DOWN, UP])) == []
+    assert play(GoalWhistleDetector(LRL), warble([DOWN, UP])) == []
 
 
 def test_a_single_slide_never_claims_the_goal():
     """A lone slide is a steering command, and must stay one."""
-    assert play(GoalWhistleDetector(), warble([DOWN])) == []
-    assert play(GoalWhistleDetector(), warble([UP])) == []
+    assert play(GoalWhistleDetector(LRL), warble([DOWN])) == []
+    assert play(GoalWhistleDetector(LRL), warble([UP])) == []
 
 
 def test_a_held_note_never_claims_the_goal():
-    assert play(GoalWhistleDetector(), hold(note_to_hz("C6"), 5.0)) == []
+    assert play(GoalWhistleDetector(LRL), hold(note_to_hz("C6"), 5.0)) == []
 
 
 def test_vibrato_is_invisible_to_it():
     """Tens of cents of wobble must not read as a leg."""
     base = note_to_hz("C6")
     frames = [base * (1.0 + 0.015 * (1 if i % 2 else -1)) for i in range(400)]
-    assert play(GoalWhistleDetector(), frames) == []
+    assert play(GoalWhistleDetector(LRL), frames) == []
 
 
 def test_small_swings_are_not_legs():
-    assert play(GoalWhistleDetector(), warble([DOWN, UP, DOWN], cents=150.0)) == []
+    assert play(GoalWhistleDetector(LRL), warble([DOWN, UP, DOWN], cents=150.0)) == []
 
 
 def test_a_pause_abandons_the_attempt():
     """Steering commands are separated by silences; the warble is one breath."""
-    frames = warble([DOWN, UP]) + silence(0.5) + warble([DOWN])
-    assert play(GoalWhistleDetector(), frames) == []
+    frames = warble([DOWN, UP]) + silence(1.0) + warble([DOWN])
+    assert play(GoalWhistleDetector(LRL), frames) == []
 
 
 def test_steering_left_right_left_with_pauses_does_not_score():
-    frames = (warble([DOWN]) + silence(0.5) + warble([UP]) + silence(0.5)
+    frames = (warble([DOWN]) + silence(1.0) + warble([UP]) + silence(1.0)
               + warble([DOWN]))
-    assert play(GoalWhistleDetector(), frames) == []
+    assert play(GoalWhistleDetector(LRL), frames) == []
 
 
 def test_slow_drifting_legs_are_not_a_warble():
-    assert play(GoalWhistleDetector(), warble([DOWN, UP, DOWN], leg_seconds=1.6)) == []
+    assert play(GoalWhistleDetector(LRL), warble([DOWN, UP, DOWN], leg_seconds=2.6)) == []
 
 
 def test_a_longer_pattern_can_be_configured():
@@ -243,18 +247,18 @@ def test_a_longer_pattern_can_be_configured():
 
 
 def test_it_fires_once_and_then_starts_over():
-    frames = warble([DOWN, UP, DOWN]) + silence(0.5) + warble([DOWN, UP, DOWN])
-    assert len(play(GoalWhistleDetector(), frames)) == 2
+    frames = warble([DOWN, UP, DOWN]) + silence(1.0) + warble([DOWN, UP, DOWN])
+    assert len(play(GoalWhistleDetector(LRL), frames)) == 2
 
 
 def test_progress_is_visible_for_the_monitor():
-    detector = GoalWhistleDetector()
+    detector = GoalWhistleDetector(LRL)
     play(detector, warble([DOWN, UP]))
     assert detector.legs_matched == 2
 
 
 def test_progress_is_zero_after_the_wrong_start():
-    detector = GoalWhistleDetector()
+    detector = GoalWhistleDetector(LRL)
     play(detector, warble([UP]))
     assert detector.legs_matched == 0
 
@@ -285,3 +289,82 @@ def test_a_bad_pattern_in_config_is_refused_by_the_detector():
 
 def test_the_pattern_is_described_for_the_monitor():
     assert describe_pattern((DOWN, UP, DOWN)) == "left > right > left"
+
+
+# --- the shipped default: three humps, tolerant of skips ---------------------------
+#
+# A real warble drops the pitch line out at the peaks, where the whistle is highest
+# and the detection gates are least happy. The shape below is read off a real attempt:
+# six legs across about 3 seconds, with skips of 0.33 s and 0.12 s.
+
+def trace(start_hz, pieces):
+    """Build frames from ("leg", cents, seconds) glides and ("gap", seconds) skips."""
+    frames, offset = [], 0.0
+    for piece in pieces:
+        if piece[0] == "gap":
+            frames += [None] * int(round(piece[1] / HOP))
+            continue
+        _, cents, seconds = piece
+        steps = max(2, int(round(seconds / HOP)))
+        frames += [start_hz * 2 ** ((offset + cents * i / steps) / 1200)
+                   for i in range(1, steps + 1)]
+        offset += cents
+    return frames
+
+
+REAL_ATTEMPT = [("leg", 940, .50), ("leg", -774, .53), ("leg", 530, .35), ("gap", .33),
+                ("leg", -610, .40), ("leg", 640, .42), ("gap", .12), ("leg", -590, .45)]
+
+
+def test_the_default_is_three_humps():
+    assert parse_pattern(GestureConfig().goal_pattern) == (UP, DOWN, UP, DOWN, UP, DOWN)
+
+
+def test_three_humps_claim_the_goal():
+    assert len(play(GoalWhistleDetector(), warble([UP, DOWN] * 3))) == 1
+
+
+def test_two_humps_are_not_enough():
+    assert play(GoalWhistleDetector(), warble([UP, DOWN] * 2)) == []
+
+
+def test_a_wiggle_of_three_slides_does_not_claim_the_goal_by_default():
+    """Left-right-left steering is three legs. The default asks for six."""
+    assert play(GoalWhistleDetector(), warble([DOWN, UP, DOWN])) == []
+
+
+def test_the_shape_of_a_real_attempt_claims_the_goal():
+    """Skips at the peaks and all: this is what a real warble looks like."""
+    assert len(play(GoalWhistleDetector(), trace(1090, REAL_ATTEMPT))) == 1
+
+
+def test_the_same_attempt_would_have_been_thrown_away_by_the_old_skip_limit():
+    old = GestureConfig(goal_gap_timeout=0.25, goal_window=2.5)
+    assert play(GoalWhistleDetector(old), trace(1090, REAL_ATTEMPT)) == []
+
+
+@pytest.mark.parametrize("skip, fires", [(0.3, 1), (0.5, 1), (0.65, 1), (1.0, 0)])
+def test_a_skip_is_forgiven_up_to_about_a_second_of_silence(skip, fires):
+    pieces = [("leg", 800, .4), ("leg", -800, .4), ("leg", 800, .4), ("gap", skip),
+              ("leg", -800, .4), ("leg", 800, .4), ("leg", -800, .4)]
+    assert len(play(GoalWhistleDetector(), trace(1000, pieces))) == fires
+
+
+def test_unhurried_humps_still_fit_in_the_window():
+    """Three humps at a relaxed pace, taking about four seconds."""
+    frames = warble([UP, DOWN] * 3, cents=700.0, leg_seconds=0.7)
+    assert len(frames) * HOP > 4.0
+    assert len(play(GoalWhistleDetector(), frames)) == 1
+
+
+def test_humps_spread_over_far_too_long_do_not():
+    frames = warble([UP, DOWN] * 3, cents=700.0, leg_seconds=1.2)
+    assert len(frames) * HOP > 7.0
+    assert play(GoalWhistleDetector(), frames) == []
+
+
+def test_steering_with_pauses_does_not_claim_the_goal_by_default():
+    frames = []
+    for direction in (DOWN, UP, DOWN, UP, DOWN, UP):
+        frames += warble([direction]) + silence(1.0)
+    assert play(GoalWhistleDetector(), frames) == []

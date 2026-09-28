@@ -164,12 +164,13 @@ def test_the_two_glides_steer_opposite_ways():
 
 # --- the goal whistle -------------------------------------------------------
 
-def test_a_real_warble_claims_the_goal():
-    """Falling, rising, falling: one unbroken whistle, through the real chain."""
-    freqs = np.concatenate([np.linspace(a, b, int(0.3 * SAMPLE_RATE), endpoint=False)
-                            for a, b in ((1400, 1000), (1000, 1400), (1400, 1000))])
+def test_three_real_humps_claim_the_goal():
+    """Up and down three times, as one unbroken whistle, through the real chain."""
+    points = [1000, 1500, 1000, 1500, 1000, 1500, 1000]
+    freqs = np.concatenate([np.linspace(a, b, int(0.35 * SAMPLE_RATE), endpoint=False)
+                            for a, b in zip(points, points[1:])])
     audio = 0.3 * np.sin(2 * np.pi * np.cumsum(freqs) / SAMPLE_RATE)
-    assert Rig().feed(np.concatenate([tone(1400, 0.1), audio])).goals == 1
+    assert Rig().feed(np.concatenate([tone(1000, 0.1), audio])).goals == 1
 
 
 def test_a_whole_driving_session_never_claims_the_goal():

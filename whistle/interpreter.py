@@ -6,7 +6,7 @@ timestamp in, an Intent out. No audio, no robot, no clock of its own.
     pitch held steady ->  throttle (three zones; silence means stop)
     pitch sliding up  ->  pivot right, for as long as the slide lasts
     pitch sliding down->  pivot left, for as long as the slide lasts
-    a warble          ->  goal claimed (default: left-right-left)
+    a warble          ->  goal claimed (default: three humps, up then down)
 
 Held and sliding are mutually exclusive, so the car never drives forward on a
 slide's way through the forward zone: you turn for exactly as long as you slide,
@@ -21,6 +21,7 @@ from dataclasses import dataclass
 from config import Config
 from whistle.commands import Drive
 from whistle.gestures import GoalWhistleDetector, Motion, MotionClassifier
+from whistle.notes import note_to_hz
 from whistle.notes import describe
 from whistle.pitch import PitchReading, PitchTracker
 from whistle.throttle import ThrottleMapper
@@ -50,6 +51,12 @@ class Interpreter:
         self.motion = MotionClassifier(self.config.gestures)
         self.goal = GoalWhistleDetector(self.config.gestures)
 
+        # Only the forward and fast zones count towards the goal warble.
+        margin = self.config.gestures.goal_floor_margin_cents
+        self._goal_floor_hz = (
+            None if margin is None
+            else note_to_hz(self.config.throttle.backward_top) * 2.0 ** (-margin / 1200.0))
+
         self._steer: Drive | None = None
         self._steer_until = 0.0
         self._steer_rate = 0.0
@@ -66,7 +73,9 @@ class Interpreter:
     def update(self, now: float, reading: PitchReading) -> Intent:
         smoothed = self.tracker.update(reading)
 
-        goal = self.goal.update(now, smoothed)
+        in_region = (smoothed is not None
+                     and (self._goal_floor_hz is None or smoothed >= self._goal_floor_hz))
+        goal = self.goal.update(now, smoothed if in_region else None)
 
         motion = self.motion.update(now, smoothed)
         if motion.motion.is_slide:

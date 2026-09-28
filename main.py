@@ -32,7 +32,7 @@ The control scheme:
   stop whistling       stop
   slide the pitch up   pivot right, for as long as you keep sliding
   slide the pitch down pivot left
-  warble left-right-left   claim the goal (a falling, rising, falling slide)
+  warble, three humps    claim the goal (up then down, three times, unbroken)
 """
 
 from __future__ import annotations

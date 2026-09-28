@@ -127,14 +127,21 @@ class GestureConfig:
     steer_release_seconds: float = 0.20
 
     # Goal command: a warble, a series of ups and downs. "left" is the falling
-    # slide and "right" the rising one, matching how each steers, so the default
-    # is left-right-left. At least three legs are required: a single slide is
-    # already a steering command, and a false positive here ends the match.
-    goal_pattern: tuple[str, ...] = ("left", "right", "left")
+    # slide and "right" the rising one, matching how each steers. The default is
+    # three humps, each one up then down, so six legs: a whistle that is easy to
+    # tell from a single steering slide, and tolerant of the pitch line dropping out
+    # at the peaks, which a real whistle does. At least three legs are required
+    # regardless: a single slide is already a steering command.
+    goal_pattern: tuple[str, ...] = ("right", "left", "right", "left", "right", "left")
     goal_leg_cents: float = 350.0           # each leg must travel this far (~3.5 semitones)
-    goal_max_leg_seconds: float = 0.9       # slower than this is a drift, not a warble
-    goal_window: float = 2.5                # the whole pattern must fit in this
-    goal_gap_timeout: float = 0.25          # silence this long abandons the attempt
+    goal_max_leg_seconds: float = 1.2       # slower than this is a drift, not a warble
+    goal_window: float = 5.0                # the whole pattern must fit in this
+    goal_gap_timeout: float = 0.7           # a skip this long is forgiven; longer abandons it
+
+    # The warble only counts in the forward and fast zones: pitches below the
+    # reverse ceiling (less this margin) are ignored by the goal detector, so voices
+    # and low hum cannot contribute legs. None turns the restriction off.
+    goal_floor_margin_cents: float | None = 150.0
 
 
 @dataclass(frozen=True)

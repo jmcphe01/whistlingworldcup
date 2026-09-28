@@ -14,7 +14,7 @@ settle the match. See [`README`](README) for the assignment text.
 | stop whistling | stop |
 | slide the pitch up | pivot right, while you keep sliding |
 | slide the pitch down | pivot left |
-| warble left-right-left: fall, rise, fall in one unbroken whistle | claim the goal |
+| warble: up then down, three times, in one unbroken whistle, in the forward or fast zone | claim the goal |
 
 Throttle and steering are told apart by **how the pitch is moving, not where it
 sits**. A steady note is a throttle command; a sliding one is a steering command;
@@ -39,19 +39,27 @@ and stops the moment you stop. Steering is live: you turn for exactly as long as
 you slide, so a longer slide turns further. Zone edges are set as note names in
 [`config.py`](config.py) and compared in cents.
 
-The goal command is a warble, a series of ups and downs. "Left" is a falling
-slide and "right" a rising one, matching how each steers, so left-right-left is
-one unbroken whistle that falls, rises, then falls again. Each leg has to travel
-about 3.5 semitones, so vibrato is invisible to it, and it counts a leg as soon as
-it has travelled far enough rather than when it ends, since the last leg has no
-reversal after it to wait for.
+The goal command is a warble, a series of ups and downs. The default is **three
+humps**: one unbroken whistle that goes up then down, three times. "Left" is a
+falling slide and "right" a rising one, matching how each steers, so that is six
+legs. Each leg has to travel about 3.5 semitones, so vibrato is invisible to it, and
+a leg counts as soon as it has travelled far enough rather than when it ends, since
+the last leg has no reversal after it to wait for.
 
-It uses the same slides as steering, so the car will pivot left, right, left as
-you whistle it; that is harmless, because scoring stops the car. What keeps
-ordinary steering from scoring by accident is that the warble must be one
-unbroken whistle (a pause longer than 0.25 s abandons it), every leg must be
-quick, and the whole thing must fit in 2.5 s. If it ever fires while you steer,
-lengthen `goal_pattern` to five legs in `config.py`.
+A real warble drops the pitch line out at the peaks, where the whistle is highest and
+the detection gates are least happy, so a skip of up to 0.7 s is forgiven
+(`goal_gap_timeout`), and the whole gesture may take up to 5 s (`goal_window`). The
+warble only counts in the forward and fast zones: pitches more than 150 cents under
+the reverse ceiling are ignored by the goal detector, so a voice or a low hum cannot
+add legs. `goal_floor_margin_cents = None` turns that off.
+
+It uses the same slides as steering, so the car pivots left and right as you whistle
+it; that is harmless, because scoring stops the car. Steering with pauses between
+slides does not add up to a score, since the pattern needs six legs and a skip longer
+than 0.7 s abandons the attempt. For a shorter command, set `goal_pattern` to three
+legs (`["left", "right", "left"]`) in `config.local.json`, at the cost of it being
+easier to trigger by accident. The `goal` line in the monitor shows the legs
+accumulating live.
 
 ## Setup
 

@@ -79,10 +79,10 @@ def test_the_search_band_covers_the_whole_whistle_range():
     assert gates.max_hz > note_to_hz("D7")
 
 
-def test_the_default_goal_command_is_left_right_left():
+def test_the_default_goal_command_is_three_humps():
     from whistle.gestures import parse_pattern
 
-    assert parse_pattern(Config().gestures.goal_pattern) == (-1, 1, -1)
+    assert parse_pattern(Config().gestures.goal_pattern) == (1, -1, 1, -1, 1, -1)
 
 
 def test_there_is_a_dead_band_between_holding_and_sliding():
