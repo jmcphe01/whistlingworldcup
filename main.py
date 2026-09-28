@@ -48,6 +48,7 @@ from config import Config, throttle_bounds
 from monitor import Snapshot, run_monitor
 from whistle.comms import Comms, LoopbackComms, make_resilient_client
 from whistle.console import HELP, ConsoleThread
+from whistle.couch import CouchMotor
 from whistle.driver import RobotDriver
 from whistle.gestures import describe_pattern
 from whistle.interpreter import Interpreter
@@ -139,6 +140,18 @@ def connect_colour_sensor(config: Config):
     return sensor
 
 
+def connect_couch_motor(config: Config):
+    import lelib
+
+    hardware = config.hardware
+    print(f"Connecting to the couch motor (card {hardware.card_color} "
+          f"{hardware.card_serial})...")
+    motor = lelib.singleMotor()
+    motor.connect(card_serial=hardware.card_serial, card_color=hardware.card_color)
+    print("  connected")
+    return motor
+
+
 def build_comms(args, config: Config, inbox: queue.Queue):
     """The broker connection, or a loopback standing in for it."""
     topic = config.mqtt.topic
@@ -221,6 +234,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
                         help="skip the light sensor (the ball needs it to be tagged)")
     parser.add_argument("--speaker", action="store_true",
                         help="play the songs on the laptop speaker, not the robot's beeper")
+    parser.add_argument("--no-couch", action="store_true",
+                        help="do not connect the couch motor")
     parser.add_argument("--both", action="store_true",
                         help="play the songs on the robot and the laptop together")
     parser.add_argument("--no-console", action="store_true",
@@ -288,10 +303,22 @@ def main(argv: list[str] | None = None) -> int:
             print(f"  WARNING: could not connect the light sensor ({error}). "
                   "Fine as the goalie, but switching to ball will not work.")
 
+    # The couch is separate from the match, so failing to connect it is a warning
+    # and never a reason not to play.
+    couch = None
+    if args.no_robot or args.no_couch or not config.hardware.couch_enabled:
+        print("Couch motor skipped.")
+    else:
+        try:
+            couch = CouchMotor(connect_couch_motor(config), config.hardware)
+        except Exception as error:
+            print(f"  WARNING: could not connect the couch motor ({error}). "
+                  "The match still works; couch commands will be ignored.")
+
     inbox: queue.Queue = queue.Queue()
     comms = build_comms(args, config, inbox)
     runner = MatchRunner(match, comms, player, driver)
-    session = Session(match, runner, driver, interpreter, comms, player, sensor)
+    session = Session(match, runner, driver, interpreter, comms, player, sensor, couch)
 
     console_queue: queue.Queue = queue.Queue()
     monitor_process, snapshots, commands = (None, None, None)
@@ -361,6 +388,8 @@ def main(argv: list[str] | None = None) -> int:
         driver.stop()
         if sensor is not None:
             sensor.disarm()
+        if couch is not None:
+            couch.shutdown()      # or the couch keeps spinning after we quit
         if snapshots is not None:
             try:
                 snapshots.put_nowait(None)
@@ -489,6 +518,7 @@ def push_snapshot(snapshots, now, reading, spectrum_db, intent, interpreter,
         tagged_message=match.config.tagged_message,
         notice=session.notice,
         light=session.light_readout(),
+        couch=session.couch_state(),
         gate_thresholds=detector.gate_thresholds,
         sensitivity=detector.sensitivity,
         device=device_name,

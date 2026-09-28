@@ -15,13 +15,14 @@ from __future__ import annotations
 from whistle.commands import Drive
 from whistle.comms import validate_message
 from whistle.console import HELP
+from whistle.couch import parse_command
 from whistle.match import Match, MatchRunner, Outcome, Phase, Role
 from whistle.songs import Song
 
 
 class Session:
     def __init__(self, match: Match, runner: MatchRunner, driver, interpreter, comms,
-                 player=None, sensor=None, log=print):
+                 player=None, sensor=None, couch=None, log=print):
         self.match = match
         self.runner = runner
         self.driver = driver
@@ -29,6 +30,7 @@ class Session:
         self.comms = comms
         self.player = player
         self.sensor = sensor
+        self.couch = couch
         self._log = log
 
         self.notice = ""            # the latest event, shown in the monitor
@@ -51,6 +53,9 @@ class Session:
         if self.match.phase is not self._announced:
             self._announced = self.match.phase
             self._log(f"  phase: {self.match.phase.value}")
+
+    def couch_state(self) -> str:
+        return "not connected" if self.couch is None else self.couch.state
 
     def light_readout(self) -> str:
         if self.sensor is None:
@@ -84,6 +89,16 @@ class Session:
     def on_message(self, payload: str) -> None:
         """A payload from the shared topic."""
         self.say(f"received {payload!r}")
+
+        # Couch commands are recognised first and never reach the match rules.
+        action = parse_command(payload, self.match.config)
+        if action is not None:
+            if self.couch is None:
+                self.say("couch command ignored: no single motor is connected")
+            else:
+                self.say(f"couch: {self.couch.execute(action)}")
+            return
+
         self._run(self.match.on_message(payload))
         self._announce_phase()
 
@@ -155,7 +170,9 @@ class Session:
 
         config = self.match.config
         other = config.tagged_message if which == "goal" else config.goal_message
-        taken = {config.start_message.strip().lower(), other.strip().lower()}
+        taken = {word.strip().lower() for word in (
+            config.start_message, other, config.couch_left_message,
+            config.couch_right_message, config.couch_stop_message)}
         if message.lower() in taken:
             raise ValueError(f"{message!r} is already used for another message; "
                              "the two teams could not tell them apart")
@@ -177,6 +194,9 @@ class Session:
             "start": config.start_message,
             "tagged": config.tagged_message,
             "scored": config.goal_message,
+            "couchleft": config.couch_left_message,
+            "couchright": config.couch_right_message,
+            "couchstop": config.couch_stop_message,
         }[kind])
 
     def _do_sim_goal(self, _value) -> None:

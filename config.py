@@ -158,6 +158,12 @@ class MqttConfig:
     goal_message: str = "goal"          # the ball scored; the goalie hears this
     tagged_message: str = "tagged"      # the goalie reached the ball; the goalie hears this
 
+    # The couch commands, sent by a partner. They share the topic with the match
+    # messages and work in either role, at any time.
+    couch_left_message: str = "couchleft"
+    couch_right_message: str = "couchright"
+    couch_stop_message: str = "couchstop"
+
 
 @dataclass(frozen=True)
 class HardwareConfig:
@@ -171,6 +177,12 @@ class HardwareConfig:
     # control, and a small speaker is louder higher up; capped so no note passes
     # the hardware's 2700 Hz limit. 0 plays them as written.
     beep_octave_shift: int = 1
+
+    # The couch motor. The sign is the direction, so if left and right come out
+    # the wrong way round, swap the signs.
+    couch_enabled: bool = True
+    couch_left_speed: int = -50
+    couch_right_speed: int = 50
 
 
 @dataclass(frozen=True)

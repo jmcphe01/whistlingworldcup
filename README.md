@@ -141,6 +141,24 @@ What each ending does, for both roles:
 | ball scores | publishes scored, winning song | hears scored, death song |
 | ball tagged | publishes tagged, death song, stops | hears tagged, winning song |
 
+### The couch
+
+A single motor that a partner spins by MQTT message: **couchleft**, **couchright**
+and **couchstop**. It connects with the same card as everything else, and the
+commands arrive on the same topic as the match messages.
+
+It is independent of the match. It answers in either role, in any phase, before
+`start` and after the match is over, and starting, ending or resetting a match never
+touches it. The session recognises the three commands first, so they never reach the
+match rules. The motor runs until told to stop, so quitting the program stops it.
+
+`couch_left_speed` and `couch_right_speed` in `HardwareConfig` set the speed, and
+their sign is the direction: if left and right come out the wrong way round, swap the
+signs. The wording is `couch_*_message` in `MqttConfig`, and the game messages
+cannot be reworded to collide with it. If the motor fails to connect the program
+carries on with a warning, and `--no-couch` skips it. To test it alone, type
+`couchleft`, `couchright` or `couchstop` in the console.
+
 ### The songs
 
 They play on the robot's own beeper, so they are audible wherever the robot is

@@ -25,6 +25,7 @@ Test commands (type one and press Return). You are the other team.
     start            publish the start message
     tagged           publish the tagged message   (a goalie sings on this)
     scored           publish the goal message     (a goalie mourns on this)
+    couchleft, couchright, couchstop   publish a couch command (as your partner would)
     send <text>      publish anything to the topic
 
   Simulated locally, no whistle or sensor needed:
@@ -41,7 +42,7 @@ Test commands (type one and press Return). You are the other team.
     help, quit
 """
 
-_OPPONENT = {"start", "tagged", "scored"}
+_OPPONENT = {"start", "tagged", "scored", "couchleft", "couchright", "couchstop"}
 _PLAIN = {"status", "help", "quit"}
 
 
