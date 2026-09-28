@@ -33,7 +33,6 @@ class Intent:
     drive: Drive
     frequency: float | None         # smoothed pitch, None when not whistling
     goal_whistle: bool              # the warble completed this frame
-    goal_detail: str = ""           # what it looked like, so a surprise can be explained
     steering: bool = False          # drive came from a slide rather than a zone
     slide_rate: float = 0.0         # signed cents per second of that slide
     motion: Motion = Motion.SILENT  # what the pitch is doing, for the monitor
@@ -67,14 +66,7 @@ class Interpreter:
     def update(self, now: float, reading: PitchReading) -> Intent:
         smoothed = self.tracker.update(reading)
 
-        # Only a loud whistle can be the goal command. Frames that just clear the
-        # detection gates are what a beeping device or a whine in the room looks
-        # like, and the command is the one thing here that ends the match.
-        over_floor = reading.level_db - reading.noise_floor_db
-        loud = over_floor >= self.config.gestures.goal_min_over_floor_db
-        goal = self.goal.update(now, smoothed if loud else None)
-        detail = (f"{self.goal.last_fire}; {over_floor:.0f} dB over the room's noise"
-                  if goal else "")
+        goal = self.goal.update(now, smoothed)
 
         motion = self.motion.update(now, smoothed)
         if motion.motion.is_slide:
@@ -90,9 +82,9 @@ class Interpreter:
         throttle = self.throttle.update(smoothed if held else None)
 
         if self._steer is not None and now < self._steer_until:
-            return Intent(self._steer, smoothed, goal, detail, steering=True,
+            return Intent(self._steer, smoothed, goal, steering=True,
                           slide_rate=self._steer_rate, motion=motion.motion)
 
         self._steer = None
         self._steer_rate = 0.0
-        return Intent(throttle, smoothed, goal, detail, motion=motion.motion)
+        return Intent(throttle, smoothed, goal, motion=motion.motion)

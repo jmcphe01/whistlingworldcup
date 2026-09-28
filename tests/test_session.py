@@ -376,29 +376,3 @@ def test_unusable_messages_are_refused_and_nothing_changes(which, text):
     before = session.match.config
     session.handle("message", (which, text))
     assert session.match.config == before
-
-
-# --- explaining a goal whistle, and not carrying one over the start -----------------
-
-def test_a_goal_whistle_before_the_start_is_still_reported_but_does_not_score():
-    """The point of reporting it: a warble nobody meant can be seen and explained."""
-    lines = []
-    session, _, player, comms = make()
-    session._log = lines.append
-    session.step(0.0, Intent(Drive.STOP, 1000.0, True, "left 400 cents in 0.20s"))
-    assert any("goal whistle heard" in line and "left 400 cents" in line for line in lines)
-    assert player.played == [] and comms.sent == []
-
-
-def test_what_was_heard_before_the_start_does_not_count_afterwards():
-    """Two legs of a warble before the match starts must not complete with one leg
-    after it."""
-    from tests.test_gestures import warble
-    from tests.conftest import reading
-
-    session, *_ = make()
-    for i, f in enumerate(warble([-1, 1])):
-        session.interpreter.update(i * 0.0116, reading(f))
-    assert session.interpreter.goal.legs_matched == 2
-    session.on_message("start")
-    assert session.interpreter.goal.legs_matched == 0

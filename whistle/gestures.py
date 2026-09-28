@@ -203,14 +203,8 @@ class GoalWhistleDetector:
     final leg of the command has no reversal after it, so waiting for one would
     mean the goal is never claimed.
 
-    A leg must also be a *glide*. Turning points alone are not enough: a tone that
-    merely jumps between pitches has plenty of them, and an earlier version
-    scored for a beeping tone that never slid at all. So a step between frames
-    bigger than `goal_max_step_cents` abandons the attempt, and a leg must take at
-    least `goal_min_leg_seconds` and be seen over `goal_min_leg_frames` frames.
-
-    Three more things separate the command from ordinary steering, which uses the
-    same slides. It must be one unbroken whistle (a silence longer than
+    Three things separate the command from ordinary steering, which uses the same
+    slides. It must be one unbroken whistle (a silence longer than
     `goal_gap_timeout` abandons the attempt), every leg must be quick, and the
     whole pattern must fit inside `goal_window`. If it fires while you steer,
     lengthen `goal_pattern` to five legs.
@@ -219,17 +213,15 @@ class GoalWhistleDetector:
     def __init__(self, config: GestureConfig | None = None):
         self.config = config or GestureConfig()
         self.pattern = parse_pattern(self.config.goal_pattern)
-        self.last_fire = ""      # what the last completed warble looked like
         self.reset()
 
     def reset(self) -> None:
         self._last_voiced: float | None = None
-        self._last_point: tuple[float, float] | None = None
-        self._recent: list[tuple[float, float]] = []      # (time, cents) before any leg
+        self._low: tuple[float, float] | None = None     # (time, cents) before a leg starts
+        self._high: tuple[float, float] | None = None
         self._direction = 0
         self._extreme: tuple[float, float] | None = None
-        self._since_extreme = 0                           # frames since the extreme moved
-        self._legs: list[tuple[int, float, float, float]] = []   # direction, time, cents, seconds
+        self._legs: list[tuple[int, float]] = []         # (direction, time it counted)
 
     @property
     def legs_matched(self) -> int:
@@ -237,7 +229,7 @@ class GoalWhistleDetector:
 
         The longest run of recent legs that is the start of the pattern.
         """
-        seen = tuple(leg[0] for leg in self._legs)
+        seen = tuple(direction for direction, _ in self._legs)
         for length in range(min(len(seen), len(self.pattern) - 1), 0, -1):
             if seen[-length:] == self.pattern[:length]:
                 return length
@@ -251,72 +243,51 @@ class GoalWhistleDetector:
         if frequency is None:
             return False
 
-        point = (now, cents_above_a4(frequency))
-        if self._last_point is not None \
-                and abs(point[1] - self._last_point[1]) > config.goal_max_step_cents:
-            self.reset()         # a whistle glides; this jumped
         self._last_voiced = now
-        self._last_point = point
+        point = (now, cents_above_a4(frequency))
         leg = config.goal_leg_cents
 
         if self._direction == 0:
-            # Before the first leg: look back over the last leg's-worth of time for
-            # the lowest and highest points, and start whichever leg the pitch
-            # commits to first. The latest of equal points is the pivot, so a long
-            # steady note before the glide is not counted as part of the glide.
-            self._recent.append(point)
-            cutoff = now - config.goal_max_leg_seconds
-            self._recent = [p for p in self._recent if p[0] >= cutoff]
-            low = min(reversed(self._recent), key=lambda p: p[1])
-            high = max(reversed(self._recent), key=lambda p: p[1])
-            if point[1] - low[1] >= leg:
-                return self._begin_leg(_UP, low, point,
-                                       sum(1 for p in self._recent if p[0] >= low[0]))
-            if high[1] - point[1] >= leg:
-                return self._begin_leg(_DOWN, high, point,
-                                       sum(1 for p in self._recent if p[0] >= high[0]))
+            # Before the first leg: remember both extremes, and start whichever
+            # leg the pitch commits to first.
+            if self._low is None:
+                self._low = self._high = point
+            if point[1] < self._low[1]:
+                self._low = point
+            if point[1] > self._high[1]:
+                self._high = point
+            if point[1] - self._low[1] >= leg:
+                return self._begin_leg(_UP, self._low, point)
+            if self._high[1] - point[1] >= leg:
+                return self._begin_leg(_DOWN, self._high, point)
             return False
 
-        self._since_extreme += 1
         if self._direction == _UP:
             if point[1] >= self._extreme[1]:
-                self._extreme, self._since_extreme = point, 0
+                self._extreme = point
             elif self._extreme[1] - point[1] >= leg:
-                return self._begin_leg(_DOWN, self._extreme, point, self._since_extreme)
+                return self._begin_leg(_DOWN, self._extreme, point)
         else:
             if point[1] <= self._extreme[1]:
-                self._extreme, self._since_extreme = point, 0
+                self._extreme = point
             elif point[1] - self._extreme[1] >= leg:
-                return self._begin_leg(_UP, self._extreme, point, self._since_extreme)
+                return self._begin_leg(_UP, self._extreme, point)
         return False
 
     def _begin_leg(self, direction: int, pivot: tuple[float, float],
-                   point: tuple[float, float], frames: int) -> bool:
-        config = self.config
+                   point: tuple[float, float]) -> bool:
         now = point[0]
-        seconds = now - pivot[0]
-
-        if seconds < config.goal_min_leg_seconds or frames < config.goal_min_leg_frames:
-            # Too abrupt to be a slide. Not a leg: start over from this point.
-            self.reset()
-            self._last_voiced, self._last_point, self._recent = now, point, [point]
-            return False
-
-        if seconds > config.goal_max_leg_seconds:
+        if now - pivot[0] > self.config.goal_max_leg_seconds:
             self._legs.clear()      # too slow to be part of a warble
         self._direction = direction
         self._extreme = point
-        self._since_extreme = 0
-        self._legs.append((direction, now, abs(point[1] - pivot[1]), seconds))
+        self._legs.append((direction, now))
 
-        cutoff = now - config.goal_window
+        cutoff = now - self.config.goal_window
         self._legs = [entry for entry in self._legs if entry[1] >= cutoff]
 
-        recent = tuple(entry[0] for entry in self._legs[-len(self.pattern):])
+        recent = tuple(direction for direction, _ in self._legs[-len(self.pattern):])
         if recent == self.pattern:
-            self.last_fire = ", ".join(
-                f"{'right' if d == _UP else 'left'} {cents:.0f} cents in {secs:.2f}s"
-                for d, _, cents, secs in self._legs[-len(self.pattern):])
             self.reset()
             return True
         return False
