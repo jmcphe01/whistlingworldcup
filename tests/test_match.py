@@ -229,3 +229,29 @@ def test_outcome_defaults_are_inert():
     outcome = Outcome(Phase.WAITING)
     assert (outcome.changed, outcome.publish, outcome.song, outcome.stop_robot) == \
         (False, (), None, False)
+
+
+# --- rematch, and changing role or topic mid-run ------------------------------
+
+def test_reset_returns_to_waiting_for_start(ball):
+    started(ball).on_goal_whistle()
+    ball.reset()
+    assert ball.phase is Phase.WAITING
+    assert ball.on_message("start").changed
+
+
+def test_reset_can_swap_the_role(ball):
+    ball.reset(Role.GOALIE)
+    assert ball.role is Role.GOALIE and not ball.is_ball
+
+
+def test_a_role_swap_takes_the_new_rules_with_it(ball):
+    ball.reset(Role.GOALIE)
+    started(ball)
+    assert ball.on_proximity().changed is False, "the goalie has no light sensor rule"
+
+
+def test_the_topic_can_change_and_outcomes_use_it(ball):
+    ball.set_topic("ME193/Test")
+    assert ball.config.topic == "ME193/Test"
+    assert ball.config.start_message == MqttConfig().start_message, "wording untouched"

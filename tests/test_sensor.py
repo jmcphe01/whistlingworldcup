@@ -98,3 +98,111 @@ def test_an_empty_baseline_is_an_error():
 def test_updating_without_a_baseline_is_an_error():
     with pytest.raises(RuntimeError):
         ProximityWatch().update(50.0)
+
+
+# --- the armable monitor ----------------------------------------------------
+#
+# These run a real background thread against a fake sensor and poll for the
+# outcome, so they wait on conditions rather than sleeping a fixed time.
+
+import time as _time
+
+from whistle.sensor import SensorMonitor
+
+
+def wait_until(condition, seconds=3.0):
+    deadline = _time.monotonic() + seconds
+    while _time.monotonic() < deadline:
+        if condition():
+            return True
+        _time.sleep(0.005)
+    return False
+
+
+class ScriptedSensor:
+    """A sensor whose reading the test can change."""
+
+    def __init__(self, value=20.0):
+        self.value = value
+
+    def __call__(self):
+        return self.value
+
+
+@pytest.fixture
+def monitor():
+    sensor = ScriptedSensor(20.0)
+    m = SensorMonitor(sensor, SensorConfig(baseline_seconds=0.05, poll_interval=0.003,
+                                           trigger_delta=12.0, persistence_reads=3),
+                      log=lambda _: None)
+    m.sensor = sensor
+    yield m
+    m.disarm()
+
+
+def test_it_measures_a_baseline_then_trips_on_a_sustained_rise(monitor):
+    monitor.arm()
+    assert wait_until(lambda: monitor.watch.baseline is not None)
+    assert monitor.watch.baseline == pytest.approx(20.0)
+    assert not monitor.tripped
+    monitor.sensor.value = 80.0
+    assert wait_until(lambda: monitor.tripped)
+
+
+def test_a_trip_can_be_acknowledged_and_reported_again(monitor):
+    monitor.arm()
+    wait_until(lambda: monitor.watch.baseline is not None)
+    monitor.sensor.value = 80.0
+    assert wait_until(lambda: monitor.tripped)
+    monitor.acknowledge()
+    assert not monitor.tripped
+    assert wait_until(lambda: monitor.tripped), "the thread kept watching"
+
+
+def test_a_steady_room_never_trips(monitor):
+    monitor.arm()
+    wait_until(lambda: monitor.watch.baseline is not None)
+    _time.sleep(0.1)
+    assert not monitor.tripped
+
+
+def test_disarming_stops_the_thread(monitor):
+    monitor.arm()
+    assert wait_until(lambda: monitor.armed)
+    monitor.disarm()
+    assert wait_until(lambda: not monitor.armed)
+
+
+def test_it_can_be_armed_again_after_being_disarmed(monitor):
+    monitor.arm()
+    wait_until(lambda: monitor.armed)
+    monitor.disarm()
+    wait_until(lambda: not monitor.armed)
+    monitor.arm()
+    assert wait_until(lambda: monitor.armed)
+
+
+def test_a_failing_read_does_not_kill_the_watch():
+    calls = {"n": 0}
+
+    def flaky():
+        calls["n"] += 1
+        if calls["n"] % 3 == 0:
+            raise OSError("bluetooth hiccup")
+        return 20.0
+
+    m = SensorMonitor(flaky, SensorConfig(baseline_seconds=0.05, poll_interval=0.003),
+                      log=lambda _: None)
+    m.arm()
+    try:
+        assert wait_until(lambda: m.watch.baseline is not None)
+        assert m.armed
+    finally:
+        m.disarm()
+
+
+def test_the_description_says_what_it_sees(monitor):
+    assert "not armed" in monitor.describe()
+    monitor.arm()
+    wait_until(lambda: monitor.watch.baseline is not None)
+    assert "baseline" in monitor.describe()

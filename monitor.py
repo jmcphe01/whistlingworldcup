@@ -5,12 +5,13 @@ full. That isolation is the point: matplotlib redraws take tens of milliseconds
 and must never sit between a whistle and the motors. If the monitor stalls, the
 car keeps driving.
 
-Four panels:
+Four panels and a control strip:
 
   spectrum     the search band, with the detected peak and the zone edges marked
   pitch track  the last few seconds against the throttle zones as coloured bands
   gates        level against the measured noise floor, and each shape gate
-  readout      note, cents, command, match phase, gesture progress
+  readout      note, cents, command, match phase, goal-whistle progress
+  controls     role, topic, microphone, sensitivity and a new-match button
 
 The gate panel is the one worth watching in a noisy room: when a whistle does not
 take, it tells you which test rejected it rather than leaving you guessing.
@@ -53,7 +54,10 @@ class Snapshot:
     role: str
     slide_rate: float = 0.0
     motion: str = ""
-    chirps: int = 0
+    goal_progress: int = 0      # legs of the goal warble matched so far
+    goal_pattern: str = ""      # e.g. "left > right > left"
+    topic: str = ""
+    notice: str = ""            # the latest event, e.g. "received 'start'"
     device: str = ""
     # noise margin, peak/median, peak/2nd peak, sub-harmonic -- in bar order
     gate_thresholds: tuple[float, float, float, float] = (10.0, 14.0, 8.0, 6.0)
@@ -131,53 +135,56 @@ def label_to_index(label: str, devices) -> int:
     raise KeyError(f"no device matching {label!r}")
 
 
-class DeviceSelector:
-    """A collapsed button that expands into the list of input devices.
+class Dropdown:
+    """A collapsed button that expands into a list of choices.
 
     matplotlib has no combobox, so this is a Button whose click toggles a
-    RadioButtons panel drawn over the readout text. The panel is hidden *and*
-    deactivated when collapsed: hiding an Axes does not stop its widget
-    receiving clicks, so without deactivating it the invisible list would keep
-    swallowing presses in that corner of the window.
+    RadioButtons list. The list is hidden *and* deactivated when collapsed:
+    hiding an Axes does not stop its widget receiving clicks, so without
+    deactivating it the invisible list would keep swallowing presses.
+
+    `make_axes` decides where the two axes live. A list that opens outside its
+    parent axes has to be a figure-level axes: matplotlib only finds child axes
+    inside their parent's bounds, so a child list would look right and take no
+    clicks.
     """
 
-    def __init__(self, host_ax, devices, current_index, on_select):
+    def __init__(self, items, current, on_select, *, prefix, make_axes, button_bounds,
+                 list_bounds, short=None):
         from matplotlib.widgets import Button, RadioButtons
 
-        self.devices = list(devices)
+        self.items = list(items)            # (label, value)
         self.on_select = on_select
-        self.labels = device_labels(self.devices)
+        self.prefix = prefix
+        self._short = dict(short or {})     # value -> the text the button shows
         self.open = False
 
-        try:
-            active = [d.index for d in self.devices].index(current_index)
-        except ValueError:
-            active = 0
+        values = [value for _, value in self.items]
+        active = values.index(current) if current in values else 0
 
-        self.button_ax = host_ax.inset_axes([0.02, 0.02, 0.66, 0.095])
+        self.button_ax = make_axes(button_bounds)
         self.button = Button(self.button_ax, "", hovercolor="0.88")
         self.button.label.set_fontsize(9)
         self.button.on_clicked(self._toggle)
 
-        height = min(0.74, 0.085 * len(self.labels) + 0.05)
-        self.list_ax = host_ax.inset_axes([0.02, 0.21, 0.66, height])
+        self.list_ax = make_axes(list_bounds)
         self.list_ax.set_zorder(20)
         self.list_ax.set_facecolor("white")
         self.list_ax.patch.set_alpha(1.0)
 
-        self.radio = RadioButtons(self.list_ax, self.labels, active=active)
+        self.radio = RadioButtons(self.list_ax, [label for label, _ in self.items],
+                                  active=active)
         for text in self.radio.labels:
             text.set_fontsize(8)
         self.radio.on_clicked(self._choose)
 
-        self.current_index = self.devices[active].index if self.devices else current_index
+        self.current = values[active] if values else current
         self._set_open(False)
-        self._refresh_button()
 
-    def _refresh_button(self) -> None:
-        current = next((d for d in self.devices if d.index == self.current_index), None)
-        name = shorten(current.name, 22) if current else "select input"
-        self.button.label.set_text(f"mic: {name}   {'^' if self.open else 'v'}")
+    def _button_text(self) -> str:
+        label = next((label for label, value in self.items if value == self.current), "")
+        name = self._short.get(self.current, label) or "select"
+        return f"{self.prefix}: {name}   {'^' if self.open else 'v'}"
 
     def _set_open(self, is_open: bool) -> None:
         self.open = is_open
@@ -185,18 +192,56 @@ class DeviceSelector:
         # Widget.active is the enable flag consulted by ignore(); a hidden Axes
         # would otherwise still hand clicks to the radio buttons.
         self.radio.active = is_open
-        self._refresh_button()
+        self.button.label.set_text(self._button_text())
 
     def _toggle(self, _event) -> None:
         self._set_open(not self.open)
         self.list_ax.figure.canvas.draw_idle()
 
     def _choose(self, label: str) -> None:
-        index = label_to_index(label, self.devices)
-        self.current_index = index
+        self.current = next(value for text, value in self.items if text == label)
         self._set_open(False)
         self.list_ax.figure.canvas.draw_idle()
-        self.on_select(index)
+        self.on_select(self.current)
+
+    def set_current(self, value) -> None:
+        """Follow a change made elsewhere, without firing `on_select`.
+
+        Used when the console changes the role: the dropdown should show what is
+        actually true, and echoing it back as a request would loop.
+        """
+        values = [v for _, v in self.items]
+        if value == self.current or value not in values:
+            return
+        self.current = value
+        self.radio.eventson = False
+        try:
+            self.radio.set_active(values.index(value))
+        finally:
+            self.radio.eventson = True
+        self.button.label.set_text(self._button_text())
+
+
+class DeviceSelector(Dropdown):
+    """The microphone dropdown: a Dropdown over PortAudio input devices."""
+
+    def __init__(self, host_ax, devices, current_index, on_select, *, make_axes=None,
+                 button_bounds=(0.02, 0.02, 0.66, 0.095), list_bounds=None):
+        self.devices = list(devices)
+        items = list(zip(device_labels(self.devices), [d.index for d in self.devices]))
+        if list_bounds is None:
+            height = min(0.74, 0.085 * len(items) + 0.05)
+            list_bounds = (0.02, 0.21, 0.66, height)
+        super().__init__(
+            items, current_index, on_select, prefix="mic",
+            make_axes=make_axes or host_ax.inset_axes,
+            button_bounds=button_bounds, list_bounds=list_bounds,
+            short={d.index: shorten(d.name, 22) for d in self.devices},
+        )
+
+    @property
+    def current_index(self) -> int:
+        return self.current
 
 
 def _shutdown(state, fig, plt) -> None:
@@ -208,24 +253,42 @@ def _shutdown(state, fig, plt) -> None:
 
 
 def run_monitor(snapshots, band_frequencies, boundaries, devices=(), current_device=None,
-                commands=None, sensitivity=5.0, title="Whistling World Cup"):
+                commands=None, sensitivity=5.0, role="ball", topic="",
+                title="Whistling World Cup"):
     """Process entry point. Reads snapshots until it receives None."""
     import matplotlib.pyplot as plt
     from matplotlib.animation import FuncAnimation
-    from matplotlib.widgets import Slider
+    from matplotlib.widgets import Button, Slider, TextBox
 
     axis = pool_centres(np.asarray(band_frequencies), MONITOR_BINS)
     backward_top, forward_top = boundaries
     history = TrackHistory()
 
-    fig, axes = plt.subplot_mosaic(
-        [["spectrum", "track"], ["gates", "readout"]],
-        figsize=(12, 7), constrained_layout=True,
-    )
+    # A fixed grid rather than constrained_layout: the control strip needs a
+    # known position to hang its widgets off, and dropdown lists have to be
+    # figure-level axes (see Dropdown).
+    fig = plt.figure(figsize=(12, 8.4))
     fig.canvas.manager.set_window_title(title)
+    grid = fig.add_gridspec(3, 2, height_ratios=[3, 3, 1.15], left=0.125, right=0.985,
+                            top=0.955, bottom=0.03, hspace=0.45, wspace=0.22)
+    spectrum_ax = fig.add_subplot(grid[0, 0])
+    track_ax = fig.add_subplot(grid[0, 1])
+    gate_ax = fig.add_subplot(grid[1, 0])
+    readout_ax = fig.add_subplot(grid[1, 1])
+    strip = grid[2, :].get_position(fig)
+    strip_height_in = strip.height * fig.get_size_inches()[1]
+
+    def at(x, y, w, h):
+        """A rectangle in the control strip, from fractions of the strip."""
+        return [strip.x0 + x * strip.width, strip.y0 + y * strip.height,
+                w * strip.width, h * strip.height]
+
+    def list_above(x, w, count):
+        """Where a dropdown's list goes: directly above the strip."""
+        height = (count * 0.27 + 0.15) / strip_height_in
+        return at(x, 1.0, w, height)
 
     # --- spectrum ---
-    spectrum_ax = axes["spectrum"]
     (spectrum_line,) = spectrum_ax.plot(axis, np.full(axis.size, -120.0), lw=0.9)
     peak_marker = spectrum_ax.axvline(axis[0], color="crimson", lw=1.4, alpha=0.0)
     spectrum_ax.set_xscale("log")
@@ -238,7 +301,6 @@ def run_monitor(snapshots, band_frequencies, boundaries, devices=(), current_dev
         spectrum_ax.axvline(edge, color="0.6", ls="--", lw=0.8)
 
     # --- pitch track ---
-    track_ax = axes["track"]
     (track_line,) = track_ax.plot([], [], lw=1.8, color="crimson")
     track_ax.set_yscale("log")
     track_ax.set_ylim(axis[0], axis[-1])
@@ -255,7 +317,6 @@ def run_monitor(snapshots, band_frequencies, boundaries, devices=(), current_dev
         track_ax.text(-TRACK_SECONDS * 0.98, position, label, fontsize=8, color="0.25")
 
     # --- gates ---
-    gate_ax = axes["gates"]
     gate_names = ["level over floor", "peak / median", "peak / 2nd peak", "sub-harmonic"]
     bars = gate_ax.barh(gate_names, [0, 0, 0, 0], color="0.7")
     thresholds = gate_ax.scatter([0, 0, 0, 0], range(4), marker="|", s=400,
@@ -266,13 +327,14 @@ def run_monitor(snapshots, band_frequencies, boundaries, devices=(), current_dev
     gate_ax.invert_yaxis()
 
     # --- readout ---
-    readout_ax = axes["readout"]
     readout_ax.axis("off")
-    readout = readout_ax.text(0.02, 0.97, "", va="top", ha="left", fontsize=11,
+    readout = readout_ax.text(0.02, 0.97, "", va="top", ha="left", fontsize=10,
                               family="monospace", transform=readout_ax.transAxes)
 
-    def request(kind, value):
-        """Post a request to the audio loop. It owns the detector, not us."""
+    state = {"latest": None, "running": True, "topic": topic}
+
+    def request(kind, value=None):
+        """Post a request to the audio loop. It owns the match, not us."""
         if commands is None:
             return
         try:
@@ -280,16 +342,41 @@ def run_monitor(snapshots, band_frequencies, boundaries, devices=(), current_dev
         except Exception:
             pass   # the loop is busy; a dropped slider tick costs nothing
 
-    selector = None
+    # --- control strip: role, topic, microphone, new match ---
+    roles = [("ball", "ball"), ("goalie", "goalie")]
+    role_dropdown = Dropdown(
+        roles, role, lambda value: request("role", value), prefix="role",
+        make_axes=fig.add_axes, button_bounds=at(0.0, 0.55, 0.14, 0.40),
+        list_bounds=list_above(0.0, 0.14, len(roles)))
+
+    topic_box = TextBox(fig.add_axes(at(0.215, 0.55, 0.27, 0.40)), "topic ", initial=topic)
+    topic_box.label.set_fontsize(9)
+    topic_box.text_disp.set_fontsize(9)
+
+    def submit_topic(text):
+        text = text.strip()
+        if text and text != state["topic"]:
+            request("topic", text)
+
+    topic_box.on_submit(submit_topic)     # Return, or clicking away
+
+    mic_dropdown = None
     if devices:
-        selector = DeviceSelector(readout_ax, devices, current_device,
-                                  lambda index: request("device", index))
+        mic_dropdown = DeviceSelector(
+            None, devices, current_device, lambda index: request("device", index),
+            make_axes=fig.add_axes, button_bounds=at(0.53, 0.55, 0.28, 0.40),
+            list_bounds=list_above(0.53, 0.28, len(devices)))
+
+    new_match = Button(fig.add_axes(at(0.84, 0.55, 0.15, 0.40)), "new match",
+                       hovercolor="0.88")
+    new_match.label.set_fontsize(9)
+    new_match.on_clicked(lambda _event: request("reset"))
 
     # Sensitivity scales all four gate thresholds at once. The marks on the gate
     # panel are drawn from the values that come back in each snapshot, so
     # dragging this visibly moves them -- the slider explains itself.
-    slider_ax = readout_ax.inset_axes([0.17, 0.135, 0.48, 0.05])
-    sensitivity_slider = Slider(slider_ax, "sens ", SENSITIVITY_MIN, SENSITIVITY_MAX,
+    sensitivity_slider = Slider(fig.add_axes(at(0.06, 0.06, 0.34, 0.30)), "sens ",
+                                SENSITIVITY_MIN, SENSITIVITY_MAX,
                                 valinit=sensitivity, valstep=0.5, valfmt="%.1f")
     sensitivity_slider.label.set_fontsize(9)
     sensitivity_slider.valtext.set_fontsize(9)
@@ -297,7 +384,8 @@ def run_monitor(snapshots, band_frequencies, boundaries, devices=(), current_dev
     # rather than once per pixel.
     sensitivity_slider.on_changed(lambda value: request("sensitivity", value))
 
-    state = {"latest": None, "running": True}
+    notice = fig.text(strip.x0 + 0.44 * strip.width, strip.y0 + 0.21 * strip.height, "",
+                      fontsize=9, va="center", ha="left", color="0.25")
 
     def drain():
         """Take the freshest snapshot available and discard the backlog."""
@@ -353,14 +441,24 @@ def run_monitor(snapshots, band_frequencies, boundaries, devices=(), current_dev
             bar.set_color("#5aa469" if value >= mark else "#c0504d")
         thresholds.set_offsets(np.column_stack([marks, range(4)]))
 
+        # Follow changes made from the console, so the controls show what is
+        # actually true. Neither fires a request back.
+        role_dropdown.set_current(snapshot.role)
+        state["topic"] = snapshot.topic
+        if snapshot.topic and not topic_box.capturekeystrokes \
+                and topic_box.text != snapshot.topic:
+            topic_box.set_val(snapshot.topic)      # dedupes against state["topic"]
+
         colour = ZONE_COLOURS.get(snapshot.drive, "0.2")
         note = snapshot.note or "--"
         cents = "" if snapshot.cents_off is None else f" {snapshot.cents_off:+.0f}c"
         pitch = "--" if snapshot.frequency is None else f"{snapshot.frequency:7.1f} Hz"
         verdict = "listening" if snapshot.reject_reason is None else snapshot.reject_reason
+        legs = snapshot.goal_pattern.count(">") + 1 if snapshot.goal_pattern else 0
         readout.set_text(
             f"role      {snapshot.role}\n"
-            f"phase     {snapshot.phase}\n\n"
+            f"phase     {snapshot.phase}\n"
+            f"topic     {snapshot.topic or '--'}\n\n"
             f"pitch     {pitch}\n"
             f"note      {note}{cents}\n"
             f"gate      {verdict}\n\n"
@@ -368,13 +466,12 @@ def run_monitor(snapshots, band_frequencies, boundaries, devices=(), current_dev
             f"{'  (steering)' if snapshot.steering else ''}\n"
             f"motion    {snapshot.motion or '--'}\n"
             f"slide     {snapshot.slide_rate:+.0f} cents/s\n"
-            f"chirps    {snapshot.chirps}/3\n"
+            f"goal      {snapshot.goal_pattern or '--'}  {snapshot.goal_progress}/{legs}\n"
             f"level     {snapshot.level_db:6.1f} dB\n"
-            f"floor     {snapshot.noise_floor_db:6.1f} dB\n\n"
-            f"mic       {shorten(snapshot.device, 22) or '--'}\n"
-            f"sens      {snapshot.sensitivity:.1f}"
+            f"floor     {snapshot.noise_floor_db:6.1f} dB"
         )
         readout.set_color(colour)
+        notice.set_text(snapshot.notice[:110])
         return []
 
     animation = FuncAnimation(fig, draw, interval=40, blit=False, cache_frame_data=False)

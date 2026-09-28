@@ -121,14 +121,15 @@ class GestureConfig:
     # frame. Steering is otherwise live: you turn for exactly as long as you slide.
     steer_release_seconds: float = 0.20
 
-    # Goal command: short, high, repeated. Deliberately unlike both the sustained
-    # drive tones and the slides, because a false positive here ends the match.
-    goal_chirp_count: int = 3
-    goal_chirp_min_hz: float = 1760.0       # A6 and up
-    goal_chirp_min_duration: float = 0.04
-    goal_chirp_max_duration: float = 0.25
-    goal_chirp_max_gap: float = 0.45
-    goal_chirp_window: float = 2.50
+    # Goal command: a warble, a series of ups and downs. "left" is the falling
+    # slide and "right" the rising one, matching how each steers, so the default
+    # is left-right-left. At least three legs are required: a single slide is
+    # already a steering command, and a false positive here ends the match.
+    goal_pattern: tuple[str, ...] = ("left", "right", "left")
+    goal_leg_cents: float = 350.0           # each leg must travel this far (~3.5 semitones)
+    goal_max_leg_seconds: float = 0.9       # slower than this is a drift, not a warble
+    goal_window: float = 2.5                # the whole pattern must fit in this
+    goal_gap_timeout: float = 0.25          # silence this long abandons the attempt
 
 
 @dataclass(frozen=True)

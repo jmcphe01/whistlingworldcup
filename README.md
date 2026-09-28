@@ -14,7 +14,7 @@ settle the match. See [`README`](README) for the assignment text.
 | stop whistling | stop |
 | slide the pitch up | pivot right, while you keep sliding |
 | slide the pitch down | pivot left |
-| three short high chirps (above A6) | claim the goal |
+| warble left-right-left: fall, rise, fall in one unbroken whistle | claim the goal |
 
 Throttle and steering are told apart by **how the pitch is moving, not where it
 sits**. A steady note is a throttle command; a sliding one is a steering command;
@@ -34,9 +34,19 @@ and stops the moment you stop. Steering is live: you turn for exactly as long as
 you slide, so a longer slide turns further. Zone edges are set as note names in
 [`config.py`](config.py) and compared in cents.
 
-The goal command is three chirps rather than one extreme pitch on purpose: a
-false positive there ends the match, and a stray noise can produce one pitch but
-not three deliberately spaced high chirps.
+The goal command is a warble, a series of ups and downs. "Left" is a falling
+slide and "right" a rising one, matching how each steers, so left-right-left is
+one unbroken whistle that falls, rises, then falls again. Each leg has to travel
+about 3.5 semitones, so vibrato is invisible to it, and it counts a leg as soon as
+it has travelled far enough rather than when it ends, since the last leg has no
+reversal after it to wait for.
+
+It uses the same slides as steering, so the car will pivot left, right, left as
+you whistle it; that is harmless, because scoring stops the car. What keeps
+ordinary steering from scoring by accident is that the warble must be one
+unbroken whistle (a pause longer than 0.25 s abandons it), every leg must be
+quick, and the whole thing must fit in 2.5 s. If it ever fires while you steer,
+lengthen `goal_pattern` to five legs in `config.py`.
 
 ## Setup
 
@@ -78,16 +88,57 @@ to `config.local.json` (gitignored):
 ## Running a match
 
 ```bash
-python main.py --role ball   --monitor
-python main.py --role goalie --monitor
+python main.py --monitor
 ```
 
-Useful flags: `--no-robot` and `--no-mqtt` for a desk test with nothing
-connected, `--device "Scarlett"` to pick an input by name, `--broker` / `--topic`
-to change brokers trackside, `--list-devices`.
+Choose the **role** (ball or goalie) and the **topic** in the control strip at the
+bottom of the monitor. The topic is applied when you press Return. Changing either
+starts a fresh match, and **new match** does the same without changing anything.
+A finished match stays finished until then: a second `start` arriving after the
+whistle must not quietly begin another match, and the robot stays connected
+between matches so there is no Bluetooth reconnect.
+
+Useful flags: `--role goalie` to start as the goalie, `--no-robot` and `--no-mqtt`
+for a desk test with nothing connected (a loopback stands in for the broker and
+the match starts at once), `--device "Scarlett"` to pick an input by name,
+`--broker` and `--topic` to change them trackside, `--list-devices`.
 
 Both roles subscribe to the one topic and wait for `start`. The message wording
 lives in `MqttConfig` so agreeing it with your opponent is a one-line edit.
+
+### Playing the other team
+
+While it runs, type commands in the terminal. This is how you test against the
+real robot without a real opponent.
+
+| command | effect |
+|---|---|
+| `start` | publish the start message (over MQTT, through the broker and back) |
+| `tagged` | publish the ball-tagged message. A goalie sings on this |
+| `scored` | publish the ball-scored message. A goalie mourns on this |
+| `send <text>` | publish anything to the topic |
+| `goal` | pretend the ball whistled the goal command (local) |
+| `tag` | pretend the goalie reached the light sensor (local) |
+| `role ball\|goalie`, `topic <name>`, `reset` | same as the controls in the window |
+| `song win\|lose` | play a song, to check the speakers |
+| `status` | role, phase, topic, light sensor reading against its trigger |
+| `help`, `quit` | |
+
+A worked test of each ending, as the ball: `start`, then either `goal` (publishes
+"ball scored" and plays the winning song) or `tag` (publishes "ball tagged" and
+plays the death song); `reset` between them. As the goalie: `role goalie`,
+`start`, then `tagged` (victory song) or `scored` (death song).
+
+What each ending does, for both roles:
+
+| event | ball | goalie |
+|---|---|---|
+| ball scores | publishes scored, winning song | hears scored, death song |
+| ball tagged | publishes tagged, death song, stops | hears tagged, winning song |
+
+Publishes go out at QoS 1 and the client resubscribes after a reconnect, because
+venue Wi-Fi drops connections and a message sent while the link is down would
+otherwise be lost, or the car would stay connected but deaf.
 
 ## How noise rejection works
 
@@ -140,8 +191,11 @@ whistle/
   gestures.py      sweep and chirp recognisers
   interpreter.py   the whole control scheme, as a pure function
   driver.py        Drive -> tank commands, with BLE rate limiting
-  sensor.py        light-sensor proximity watch
+  sensor.py        light-sensor proximity watch, and the armable monitor thread
   match.py         match rules as a state machine, plus the runner
+  session.py       role, topic, rematch, messages and sensor trips, on one thread
+  comms.py         MQTT adapter around mqttlib, plus a loopback for --no-mqtt
+  console.py       the typed test commands
   songs.py         the death song and the song of success
 ```
 
@@ -154,7 +208,7 @@ inline at 86 frames a second.
 ## Tests
 
 ```bash
-pytest                       # 268 tests, about 1.5 s
+pytest                       # about 430 tests, a few seconds
 pytest --cov=whistle --cov=config --cov-report=term-missing
 ```
 
@@ -182,10 +236,19 @@ dependencies. It is the main thing shaping the architecture.
 
 ## Status
 
-Verified: the full suite passes, and the live path has been validated at real
-time through a loopback audio device — held A5, D7 and C4 produced forward,
-forward-fast and reverse, rising and falling glides produced right and left
-turns, pitch tracked within 2 cents, no dropped audio blocks.
+Verified by the unit suite: the whole control scheme, the warble (including
+through the real audio chain), the match rules for both roles, role/topic/rematch
+handling, the typed commands, the MQTT adapter against a fake client, and the
+light-sensor monitor against a scripted sensor. The monitor's controls were
+checked with synthetic mouse and key events.
 
-Not yet verified on hardware: the robot, the colour sensor and the broker. Those
-need the cars and an opponent.
+Not yet verified on hardware: the robot, the colour sensor and the broker. Two
+things to check on the day with the `status` command:
+
+- **The sensor's reflection scale.** `trigger_delta` in `SensorConfig` is 12,
+  which assumes reflection reads 0-100. The course wrapper normalises it by 255
+  elsewhere, which suggests 0-255. Watch the reading in `status` while you move a
+  hand toward the sensor and scale `trigger_delta` to match.
+- **False tags from the goal itself.** A forward-facing reflection sensor also
+  rises when the car nears the goal wall. Drive up to the goal and check the
+  reading stays under the trigger.

@@ -138,94 +138,79 @@ def test_an_unknown_current_device_falls_back_to_the_first():
 
 # --- the command channel ----------------------------------------------------
 
-def device_of(commands):
-    return wait_for(commands)[0]
+def queue_of(*items):
+    import queue as _queue
+
+    q = _queue.Queue()      # no writer thread, so a burst is all there at once
+    for item in items:
+        q.put(item)
+    return q
 
 
-def test_no_queue_means_no_request():
-    assert main.drain_commands(None) == (None, None)
+def test_no_queue_means_no_requests():
+    assert main.collect_commands(None) == []
+    assert main.collect_commands(queue_of()) == []
 
 
-def test_an_empty_queue_means_no_request():
-    assert main.drain_commands(multiprocessing.Queue()) == (None, None)
-
-
-def test_a_device_request_is_picked_up():
-    commands = multiprocessing.Queue()
-    commands.put(("device", 3))
-    assert device_of(commands) == 3
-
-
-def test_a_sensitivity_request_is_picked_up():
-    commands = multiprocessing.Queue()
-    commands.put(("sensitivity", 8.5))
-    assert wait_for(commands)[1] == 8.5
+def test_a_request_is_picked_up():
+    assert main.collect_commands(queue_of(("device", 3))) == [("device", 3)]
 
 
 def test_only_the_newest_device_is_honoured():
     """Clicking three devices quickly should land on the last one, not replay
     each in turn -- every switch costs a stream reopen and a recalibration."""
-    commands = multiprocessing.Queue()
-    for index in (0, 1, 3):
-        commands.put(("device", index))
-    assert device_of(commands) == 3
+    result = main.collect_commands(queue_of(("device", 0), ("device", 1), ("device", 3)))
+    assert result == [("device", 3)]
 
 
 def test_only_the_newest_sensitivity_is_honoured():
     """One drag of the slider posts a stream of values."""
-    import queue as _queue
-
-    commands = _queue.Queue()      # no writer thread, so the burst is all there
-    for value in (5.0, 6.0, 7.0, 7.5):
-        commands.put(("sensitivity", value))
-    assert main.drain_commands(commands)[1] == 7.5
+    result = main.collect_commands(
+        queue_of(*[("sensitivity", v) for v in (5.0, 6.0, 7.0, 7.5)]))
+    assert result == [("sensitivity", 7.5)]
 
 
-def test_both_kinds_can_arrive_together():
-    commands = multiprocessing.Queue()
-    commands.put(("sensitivity", 2.0))
-    commands.put(("device", 1))
-    assert wait_for(commands) == (1, 2.0)
+def test_discrete_requests_are_all_kept_in_order():
+    """A role change then a reset are two events, not one setting."""
+    items = [("role", "goalie"), ("topic", "ME193/Test"), ("reset", None)]
+    assert main.collect_commands(queue_of(*items)) == items
 
 
-def test_unrelated_commands_are_ignored():
-    commands = multiprocessing.Queue()
-    commands.put(("something-else", 7))
-    commands.put(("device", 1))
-    assert device_of(commands) == 1
+def test_requests_from_several_queues_are_combined():
+    monitor = queue_of(("role", "goalie"))
+    console = queue_of(("opponent", "start"))
+    assert main.collect_commands(monitor, console) == [
+        ("role", "goalie"), ("opponent", "start")]
+
+
+def test_malformed_items_are_skipped():
+    assert main.collect_commands(queue_of("junk", ("reset", None))) == [("reset", None)]
 
 
 def test_the_queue_is_drained_so_a_request_fires_once():
-    commands = multiprocessing.Queue()
-    commands.put(("device", 3))
-    wait_for(commands)
-    assert main.drain_commands(commands) == (None, None)
-
-
-def wait_for(commands, attempts=200):
-    """multiprocessing queues are fed by a writer thread, so poll briefly."""
-    import time
-
-    for _ in range(attempts):
-        result = main.drain_commands(commands)
-        if result != (None, None):
-            return result
-        time.sleep(0.01)
-    return (None, None)
+    q = queue_of(("device", 3))
+    main.collect_commands(q)
+    assert main.collect_commands(q) == []
 
 
 def test_the_widget_posts_straight_onto_a_real_queue():
     """End to end across the boundary: a click in the monitor becomes a request
     the audio loop can read."""
+    import time
+
     commands = multiprocessing.Queue()
     fig, ax = plt.subplots()
     try:
-        def request(index):
-            commands.put_nowait(("device", index))
-
-        widget = DeviceSelector(ax, DEVICES, current_index=0, on_select=request)
+        widget = DeviceSelector(ax, DEVICES, current_index=0,
+                                on_select=lambda i: commands.put_nowait(("device", i)))
         widget.radio.set_active(1)
-        assert device_of(commands) == 1
+        result = []
+        for _ in range(200):     # a multiprocessing queue is fed by a writer thread
+            result = main.collect_commands(commands)
+            if result:
+                break
+            time.sleep(0.01)
+        assert result == [("device", 1)]
     finally:
         plt.close(fig)
 

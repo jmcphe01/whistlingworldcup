@@ -1,13 +1,11 @@
-"""Gestures: how the pitch is *moving* steers, and three short high chirps score.
+"""Gestures: how the pitch is *moving* steers, and a warble scores.
 
 Both recognisers are fed one frame at a time with an explicit timestamp, and hold
 no reference to a clock. Tests therefore drive them through whole gestures
 instantly, and nothing here needs a microphone.
 
-Motion uses the *smoothed* pitch, since smoothing only helps when the question
-is which way a note is travelling. Chirps use the raw per-frame pitch: they are
-short enough that the tracker's persistence requirement would swallow them, and
-requiring tens of milliseconds of continuous voicing is its own persistence check.
+Both use the *smoothed* pitch, since smoothing only helps when the question is
+which way a note is travelling.
 """
 
 from __future__ import annotations
@@ -154,84 +152,142 @@ class MotionClassifier:
         return sum(1 for step in steps if step * direction > 0) / len(steps)
 
 
-class ChirpSequenceDetector:
-    """Recognises the goal command: N short, high chirps in quick succession.
+_UP = 1
+_DOWN = -1
+_DIRECTIONS = {"up": _UP, "right": _UP, "down": _DOWN, "left": _DOWN}
+MIN_PATTERN_LEGS = 3
 
-    A single extreme pitch would be a simpler command, but a false positive here
-    ends the match, and a stray noise can produce one pitch. It cannot produce
-    three deliberately spaced high chirps. Keeping the chirps short also makes
-    them unmistakable against the sustained tones that drive the car and the
-    sweeps that steer it -- an over-long burst breaks the chain rather than
-    counting toward it.
+
+def parse_pattern(names) -> tuple[int, ...]:
+    """Turn ("left", "right", "left") into directions, rejecting unsafe patterns.
+
+    "left" is a falling slide and "right" a rising one, because that is what
+    each steers. Two things are refused rather than quietly accepted, since a
+    bad pattern here would either score by accident or never score at all:
+    fewer than three legs (a lone slide is already a steering command), and two
+    identical directions in a row (the detector alternates by construction, so
+    such a pattern could never match).
+    """
+    pattern = []
+    for name in names:
+        try:
+            pattern.append(_DIRECTIONS[str(name).strip().lower()])
+        except KeyError:
+            raise ValueError(
+                f"unknown goal direction {name!r}; use left/right or down/up") from None
+
+    if len(pattern) < MIN_PATTERN_LEGS:
+        raise ValueError(
+            f"the goal pattern needs at least {MIN_PATTERN_LEGS} legs, got {len(pattern)}")
+    if any(a == b for a, b in zip(pattern, pattern[1:])):
+        raise ValueError("the goal pattern must alternate direction "
+                         "(a warble goes down, then up, then down)")
+    return tuple(pattern)
+
+
+def describe_pattern(pattern) -> str:
+    """(-1, 1, -1) -> "left > right > left", for the monitor."""
+    return " > ".join("right" if direction == _UP else "left" for direction in pattern)
+
+
+class GoalWhistleDetector:
+    """Recognises the scoring command: a warble, e.g. left-right-left.
+
+    A warble is a series of legs -- down, up, down -- so this finds the turning
+    points of the pitch rather than classifying a window of it. Each leg has to
+    travel `goal_leg_cents`, and the pitch has to retrace that far before a
+    reversal counts, which is what makes vibrato (tens of cents) invisible to it
+    while a deliberate 4-semitone swing is unmistakable.
+
+    A leg counts the moment it has travelled far enough, not when it ends. The
+    final leg of the command has no reversal after it, so waiting for one would
+    mean the goal is never claimed.
+
+    Three things separate the command from ordinary steering, which uses the same
+    slides. It must be one unbroken whistle (a silence longer than
+    `goal_gap_timeout` abandons the attempt), every leg must be quick, and the
+    whole pattern must fit inside `goal_window`. If it fires while you steer,
+    lengthen `goal_pattern` to five legs.
     """
 
     def __init__(self, config: GestureConfig | None = None):
         self.config = config or GestureConfig()
-        self._burst_start: float | None = None
-        self._last_on: float | None = None
-        self._completed: list[float] = []   # end time of each accepted chirp
-        # Set once a burst has run too long. Holds until the pitch drops, so the
-        # tail of one sustained note cannot be harvested as a chirp.
-        self._suppressed = False
+        self.pattern = parse_pattern(self.config.goal_pattern)
+        self.reset()
 
     def reset(self) -> None:
-        self._burst_start = None
-        self._last_on = None
-        self._completed.clear()
-        self._suppressed = False
+        self._last_voiced: float | None = None
+        self._low: tuple[float, float] | None = None     # (time, cents) before a leg starts
+        self._high: tuple[float, float] | None = None
+        self._direction = 0
+        self._extreme: tuple[float, float] | None = None
+        self._legs: list[tuple[int, float]] = []         # (direction, time it counted)
 
     @property
-    def chirps_so_far(self) -> int:
-        return len(self._completed)
+    def legs_matched(self) -> int:
+        """How far into the pattern the whistle has got, for the live monitor.
+
+        The longest run of recent legs that is the start of the pattern.
+        """
+        seen = tuple(direction for direction, _ in self._legs)
+        for length in range(min(len(seen), len(self.pattern) - 1), 0, -1):
+            if seen[-length:] == self.pattern[:length]:
+                return length
+        return 0
 
     def update(self, now: float, frequency: float | None) -> bool:
-        """Feed one raw frame. True on the frame the full sequence completes."""
-        high = frequency is not None and frequency >= self.config.goal_chirp_min_hz
-
-        if high:
-            if self._suppressed:
-                return False
-            if self._burst_start is None:
-                self._burst_start = now
-            self._last_on = now
-            # A burst that outstays its welcome is a sustained note, not a chirp.
-            # Suppress the rest of it: without this, the note's tail would start a
-            # fresh burst and could be counted as a chirp in its own right.
-            if now - self._burst_start > self.config.goal_chirp_max_duration:
-                self._suppressed = True
-                self._burst_start = None
-                self._last_on = None
-                self._completed.clear()
+        """Feed one smoothed frame. True on the frame the pattern completes."""
+        config = self.config
+        if self._last_voiced is not None and now - self._last_voiced > config.goal_gap_timeout:
+            self.reset()
+        if frequency is None:
             return False
 
-        self._suppressed = False
-        if self._burst_start is None:
-            self._expire(now)
+        self._last_voiced = now
+        point = (now, cents_above_a4(frequency))
+        leg = config.goal_leg_cents
+
+        if self._direction == 0:
+            # Before the first leg: remember both extremes, and start whichever
+            # leg the pitch commits to first.
+            if self._low is None:
+                self._low = self._high = point
+            if point[1] < self._low[1]:
+                self._low = point
+            if point[1] > self._high[1]:
+                self._high = point
+            if point[1] - self._low[1] >= leg:
+                return self._begin_leg(_UP, self._low, point)
+            if self._high[1] - point[1] >= leg:
+                return self._begin_leg(_DOWN, self._high, point)
             return False
 
-        duration = now - self._burst_start
-        start = self._burst_start
-        self._burst_start = None
-        self._last_on = None
+        if self._direction == _UP:
+            if point[1] >= self._extreme[1]:
+                self._extreme = point
+            elif self._extreme[1] - point[1] >= leg:
+                return self._begin_leg(_DOWN, self._extreme, point)
+        else:
+            if point[1] <= self._extreme[1]:
+                self._extreme = point
+            elif point[1] - self._extreme[1] >= leg:
+                return self._begin_leg(_UP, self._extreme, point)
+        return False
 
-        if not (self.config.goal_chirp_min_duration
-                <= duration
-                <= self.config.goal_chirp_max_duration):
-            self._completed.clear()
-            return False
+    def _begin_leg(self, direction: int, pivot: tuple[float, float],
+                   point: tuple[float, float]) -> bool:
+        now = point[0]
+        if now - pivot[0] > self.config.goal_max_leg_seconds:
+            self._legs.clear()      # too slow to be part of a warble
+        self._direction = direction
+        self._extreme = point
+        self._legs.append((direction, now))
 
-        # Too long a gap since the previous chirp starts a new attempt.
-        if self._completed and start - self._completed[-1] > self.config.goal_chirp_max_gap:
-            self._completed.clear()
+        cutoff = now - self.config.goal_window
+        self._legs = [entry for entry in self._legs if entry[1] >= cutoff]
 
-        self._completed.append(now)
-        self._expire(now)
-
-        if len(self._completed) >= self.config.goal_chirp_count:
+        recent = tuple(direction for direction, _ in self._legs[-len(self.pattern):])
+        if recent == self.pattern:
             self.reset()
             return True
         return False
-
-    def _expire(self, now: float) -> None:
-        cutoff = now - self.config.goal_chirp_window
-        self._completed = [end for end in self._completed if end >= cutoff]

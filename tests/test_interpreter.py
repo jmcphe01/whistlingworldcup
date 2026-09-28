@@ -137,11 +137,10 @@ def test_throttle_resumes_after_a_turn(interpreter):
 
 # --- the goal whistle -------------------------------------------------------
 
-def test_three_high_chirps_claim_the_goal(interpreter):
-    frames = []
-    for _ in range(3):
-        frames += hold(note_to_hz("C7"), 0.12) + silence(0.15)
-    intents = run(interpreter, frames)
+def test_a_left_right_left_warble_claims_the_goal(interpreter):
+    from tests.test_gestures import warble
+
+    intents = run(interpreter, warble([-1, 1, -1]))
     assert sum(1 for intent in intents if intent.goal_whistle) == 1
 
 

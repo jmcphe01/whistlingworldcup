@@ -6,7 +6,7 @@ timestamp in, an Intent out. No audio, no robot, no clock of its own.
     pitch held steady ->  throttle (three zones; silence means stop)
     pitch sliding up  ->  pivot right, for as long as the slide lasts
     pitch sliding down->  pivot left, for as long as the slide lasts
-    three high chirps ->  goal claimed
+    a warble          ->  goal claimed (default: left-right-left)
 
 Held and sliding are mutually exclusive, so the car never drives forward on a
 slide's way through the forward zone: you turn for exactly as long as you slide,
@@ -20,7 +20,7 @@ from dataclasses import dataclass
 
 from config import Config
 from whistle.commands import Drive
-from whistle.gestures import ChirpSequenceDetector, Motion, MotionClassifier
+from whistle.gestures import GoalWhistleDetector, Motion, MotionClassifier
 from whistle.notes import describe
 from whistle.pitch import PitchReading, PitchTracker
 from whistle.throttle import ThrottleMapper
@@ -32,7 +32,7 @@ class Intent:
 
     drive: Drive
     frequency: float | None         # smoothed pitch, None when not whistling
-    goal_whistle: bool              # the chirp sequence completed this frame
+    goal_whistle: bool              # the warble completed this frame
     steering: bool = False          # drive came from a slide rather than a zone
     slide_rate: float = 0.0         # signed cents per second of that slide
     motion: Motion = Motion.SILENT  # what the pitch is doing, for the monitor
@@ -48,7 +48,7 @@ class Interpreter:
         self.tracker = PitchTracker(self.config.gates)
         self.throttle = ThrottleMapper(self.config.throttle)
         self.motion = MotionClassifier(self.config.gestures)
-        self.chirps = ChirpSequenceDetector(self.config.gestures)
+        self.goal = GoalWhistleDetector(self.config.gestures)
 
         self._steer: Drive | None = None
         self._steer_until = 0.0
@@ -58,17 +58,15 @@ class Interpreter:
         self.tracker.reset()
         self.throttle.reset()
         self.motion.reset()
-        self.chirps.reset()
+        self.goal.reset()
         self._steer = None
         self._steer_until = 0.0
         self._steer_rate = 0.0
 
     def update(self, now: float, reading: PitchReading) -> Intent:
-        raw = reading.frequency if reading.voiced else None
         smoothed = self.tracker.update(reading)
 
-        # Chirps read the raw pitch; see the note in gestures.py.
-        goal = self.chirps.update(now, raw)
+        goal = self.goal.update(now, smoothed)
 
         motion = self.motion.update(now, smoothed)
         if motion.motion.is_slide:

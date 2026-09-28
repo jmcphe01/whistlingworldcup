@@ -1,4 +1,4 @@
-"""Motion classification and chirp recognition.
+"""Motion classification and the warble that claims the goal.
 
 Both detectors take an explicit timestamp, so these tests play whole gestures
 through them instantly. `HOP` is the real frame interval (11.6 ms at 44.1 kHz
@@ -10,7 +10,13 @@ from __future__ import annotations
 import pytest
 
 from config import GestureConfig
-from whistle.gestures import ChirpSequenceDetector, Motion, MotionClassifier
+from whistle.gestures import (
+    GoalWhistleDetector,
+    Motion,
+    MotionClassifier,
+    describe_pattern,
+    parse_pattern,
+)
 from whistle.notes import note_to_hz
 
 HOP = 512 / 44100.0     # 11.6 ms
@@ -148,68 +154,134 @@ def test_the_thresholds_are_configurable():
     assert not any(m.is_slide for m in settled(glide(note_to_hz("A4"), note_to_hz("A6"), 1.0), lazy))
 
 
-# --- chirps: the goal command ----------------------------------------------
+# --- the warble: the goal command -------------------------------------------
+#
+# "left" is a falling slide and "right" a rising one, so left-right-left is a
+# whistle that falls, rises, then falls again without breaking.
 
-CHIRP_HZ = note_to_hz("C7")      # comfortably above the A6 chirp floor
+DOWN, UP = -1, 1
 
 
-def chirp_sequence(count=3, on=0.12, gap=0.15, hz=CHIRP_HZ):
-    frames = []
-    for _ in range(count):
-        frames += hold(hz, on) + silence(gap)
+def warble(directions, cents=600.0, leg_seconds=0.3, start_hz=None, hop=HOP):
+    """One unbroken whistle made of legs, each falling (-1) or rising (+1)."""
+    start_hz = start_hz or note_to_hz("A5")
+    frames = [start_hz] * 3          # a moment of steady whistling first
+    offset = 0.0
+    for direction in directions:
+        steps = max(2, int(round(leg_seconds / hop)))
+        for i in range(1, steps + 1):
+            frames.append(start_hz * 2 ** ((offset + direction * cents * i / steps) / 1200))
+        offset += direction * cents
     return frames
 
 
-def test_three_high_chirps_claim_the_goal():
-    fired = play(ChirpSequenceDetector(), chirp_sequence())
-    assert len(fired) == 1
+def test_left_right_left_claims_the_goal():
+    assert len(play(GoalWhistleDetector(), warble([DOWN, UP, DOWN]))) == 1
 
 
-def test_two_chirps_are_not_enough():
-    assert play(ChirpSequenceDetector(), chirp_sequence(count=2)) == []
+def test_it_fires_when_the_last_leg_has_travelled_far_enough_not_after_it_ends():
+    """The final leg has no reversal after it, so waiting for one would mean the
+    goal was never claimed."""
+    frames = warble([DOWN, UP, DOWN])
+    when, _ = play(GoalWhistleDetector(), frames)[0]
+    assert when < (len(frames) - 1) * HOP
 
 
-def test_a_sustained_high_note_is_not_a_chirp_sequence():
-    """Whistling D7 to go fast must never be read as claiming the goal."""
-    assert play(ChirpSequenceDetector(), hold(note_to_hz("D7"), 4.0) + silence(0.5)) == []
+def test_extra_legs_before_the_pattern_do_not_matter():
+    assert len(play(GoalWhistleDetector(), warble([UP, DOWN, UP, DOWN]))) == 1
 
 
-def test_low_chirps_are_ignored():
-    """Chirping in the drive range does not claim the goal."""
-    assert play(ChirpSequenceDetector(), chirp_sequence(hz=note_to_hz("A5"))) == []
+def test_the_wrong_order_does_not_claim_the_goal():
+    assert play(GoalWhistleDetector(), warble([UP, DOWN, UP])) == []
 
 
-def test_a_sustained_note_breaks_a_partial_sequence():
-    frames = (chirp_sequence(count=2)
-              + hold(CHIRP_HZ, 1.0) + silence(0.2)
-              + chirp_sequence(count=2))
-    assert play(ChirpSequenceDetector(), frames) == []
+def test_two_legs_are_not_enough():
+    assert play(GoalWhistleDetector(), warble([DOWN, UP])) == []
 
 
-def test_chirps_spaced_too_far_apart_do_not_count():
-    assert play(ChirpSequenceDetector(), chirp_sequence(gap=1.2)) == []
+def test_a_single_slide_never_claims_the_goal():
+    """A lone slide is a steering command, and must stay one."""
+    assert play(GoalWhistleDetector(), warble([DOWN])) == []
+    assert play(GoalWhistleDetector(), warble([UP])) == []
 
 
-def test_chirps_must_be_long_enough_to_be_deliberate():
-    """A single stray frame above the gate is not a chirp."""
-    frames = []
-    for _ in range(5):
-        frames += [CHIRP_HZ] + silence(0.15)
-    assert play(ChirpSequenceDetector(), frames) == []
+def test_a_held_note_never_claims_the_goal():
+    assert play(GoalWhistleDetector(), hold(note_to_hz("C6"), 5.0)) == []
 
 
-def test_the_sequence_fires_once_and_resets():
-    fired = play(ChirpSequenceDetector(), chirp_sequence(count=6))
-    assert len(fired) == 2, "six chirps is two complete sequences, not four"
+def test_vibrato_is_invisible_to_it():
+    """Tens of cents of wobble must not read as a leg."""
+    base = note_to_hz("C6")
+    frames = [base * (1.0 + 0.015 * (1 if i % 2 else -1)) for i in range(400)]
+    assert play(GoalWhistleDetector(), frames) == []
 
 
-def test_partial_progress_is_visible():
-    detector = ChirpSequenceDetector()
-    play(detector, chirp_sequence(count=2))
-    assert detector.chirps_so_far == 2
+def test_small_swings_are_not_legs():
+    assert play(GoalWhistleDetector(), warble([DOWN, UP, DOWN], cents=150.0)) == []
 
 
-def test_a_sweep_does_not_claim_the_goal():
-    """The steering gesture passes through the chirp band; it must not fire."""
-    frames = glide(note_to_hz("A5"), note_to_hz("D7"), 0.8) + silence(0.3)
-    assert play(ChirpSequenceDetector(), frames) == []
+def test_a_pause_abandons_the_attempt():
+    """Steering commands are separated by silences; the warble is one breath."""
+    frames = warble([DOWN, UP]) + silence(0.5) + warble([DOWN])
+    assert play(GoalWhistleDetector(), frames) == []
+
+
+def test_steering_left_right_left_with_pauses_does_not_score():
+    frames = (warble([DOWN]) + silence(0.5) + warble([UP]) + silence(0.5)
+              + warble([DOWN]))
+    assert play(GoalWhistleDetector(), frames) == []
+
+
+def test_slow_drifting_legs_are_not_a_warble():
+    assert play(GoalWhistleDetector(), warble([DOWN, UP, DOWN], leg_seconds=1.6)) == []
+
+
+def test_a_longer_pattern_can_be_configured():
+    config = GestureConfig(goal_pattern=("left", "right", "left", "right", "left"))
+    assert play(GoalWhistleDetector(config), warble([DOWN, UP, DOWN])) == []
+    assert len(play(GoalWhistleDetector(config), warble([DOWN, UP, DOWN, UP, DOWN]))) == 1
+
+
+def test_it_fires_once_and_then_starts_over():
+    frames = warble([DOWN, UP, DOWN]) + silence(0.5) + warble([DOWN, UP, DOWN])
+    assert len(play(GoalWhistleDetector(), frames)) == 2
+
+
+def test_progress_is_visible_for_the_monitor():
+    detector = GoalWhistleDetector()
+    play(detector, warble([DOWN, UP]))
+    assert detector.legs_matched == 2
+
+
+def test_progress_is_zero_after_the_wrong_start():
+    detector = GoalWhistleDetector()
+    play(detector, warble([UP]))
+    assert detector.legs_matched == 0
+
+
+@pytest.mark.parametrize("names, expected", [
+    (("left", "right", "left"), (DOWN, UP, DOWN)),
+    (("DOWN", "Up", "down"), (DOWN, UP, DOWN)),
+    (("right", "left", "right"), (UP, DOWN, UP)),
+])
+def test_patterns_accept_either_vocabulary(names, expected):
+    assert parse_pattern(names) == expected
+
+
+@pytest.mark.parametrize("names", [
+    ("left",), ("left", "right"),               # too short to be a series
+    ("left", "left", "right"),                   # cannot alternate
+    ("left", "sideways", "left"),                # not a direction
+])
+def test_unsafe_patterns_are_refused(names):
+    with pytest.raises(ValueError):
+        parse_pattern(names)
+
+
+def test_a_bad_pattern_in_config_is_refused_by_the_detector():
+    with pytest.raises(ValueError):
+        GoalWhistleDetector(GestureConfig(goal_pattern=("left",)))
+
+
+def test_the_pattern_is_described_for_the_monitor():
+    assert describe_pattern((DOWN, UP, DOWN)) == "left > right > left"

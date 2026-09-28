@@ -11,6 +11,7 @@ speaker is louder than the note.
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from enum import Enum
 
@@ -113,6 +114,7 @@ class SongPlayer:
 
     def _ensure_mixer(self):
         if self._mixer is None:
+            os.environ.setdefault("PYGAME_HIDE_SUPPORT_PROMPT", "1")
             import pygame
 
             pygame.mixer.init(frequency=self.sample_rate, size=-16, channels=1)

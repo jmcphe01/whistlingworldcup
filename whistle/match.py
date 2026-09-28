@@ -20,7 +20,7 @@ therefore role-guarded -- the ball ignores the outcome messages it sent itself.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import Enum
 
 from config import MqttConfig
@@ -63,6 +63,20 @@ class Match:
     @property
     def is_ball(self) -> bool:
         return self.role is Role.BALL
+
+    def reset(self, role: Role | None = None) -> None:
+        """Back to waiting for `start`, optionally as the other role.
+
+        A finished match stays finished until this is called: a second "start"
+        arriving after the whistle must not quietly begin another match.
+        """
+        if role is not None:
+            self.role = role
+        self.phase = Phase.WAITING
+
+    def set_topic(self, topic: str) -> None:
+        """Change the shared topic. Outcomes are published to whatever this holds."""
+        self.config = replace(self.config, topic=topic)
 
     @property
     def running(self) -> bool:
