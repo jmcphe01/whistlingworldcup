@@ -29,6 +29,11 @@ opposite swings it reports a slide that is not there.
 Between "clearly steady" and "clearly sliding" there is a deliberate dead band
 where the car stops. An ambiguous whistle doing nothing beats it guessing.
 
+The double motor's forward and backward are flipped (`invert_drive` in
+`ThrottleConfig`, on by default), because the car is mounted so that forward needs
+negative track speeds. Only the linear motion is flipped. Pivots are left alone,
+since inverting them would swap left and right turns. Set it to `False` to undo.
+
 Driving is hold-to-go: the car moves only while you are whistling a steady note,
 and stops the moment you stop. Steering is live: you turn for exactly as long as
 you slide, so a longer slide turns further. Zone edges are set as note names in

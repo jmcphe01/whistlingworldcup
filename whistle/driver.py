@@ -30,14 +30,20 @@ class TankRobot(Protocol):
 
 
 def tank_for(drive: Drive, config: ThrottleConfig) -> tuple[int, int]:
-    """Left and right track speeds as percentages, for one command."""
+    """Left and right track speeds as percentages, for one command.
+
+    `invert_drive` reverses forward and backward only. Pivots counter-rotate the
+    tracks, so inverting them too would swap left and right turns, which is not
+    what a car whose front is the wrong end needs.
+    """
     forward, fast = config.speed_forward, config.speed_fast
     back, turn = config.speed_backward, config.speed_turn
+    sign = -1 if config.invert_drive else 1
     return {
         Drive.STOP: (0, 0),
-        Drive.FORWARD: (forward, forward),
-        Drive.FORWARD_FAST: (fast, fast),
-        Drive.BACKWARD: (-back, -back),
+        Drive.FORWARD: (sign * forward, sign * forward),
+        Drive.FORWARD_FAST: (sign * fast, sign * fast),
+        Drive.BACKWARD: (-sign * back, -sign * back),
         Drive.TURN_RIGHT: (turn, -turn),
         Drive.TURN_LEFT: (-turn, turn),
     }[drive]

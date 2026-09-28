@@ -113,11 +113,13 @@ def test_the_motors_stop_when_the_whistle_stops():
 def test_going_fast_really_is_faster():
     forward = Rig().feed(tone(note_to_hz("C6"), 0.5)).tank_calls[-1]
     fast = Rig().feed(tone(note_to_hz("D7"), 0.5)).tank_calls[-1]
-    assert fast[0] > forward[0]
+    assert abs(fast[0]) > abs(forward[0])
 
 
-def test_reverse_runs_the_tracks_backwards():
-    assert Rig().feed(tone(note_to_hz("C4"), 0.5)).tank_calls[-1][0] < 0
+def test_reverse_runs_the_tracks_the_opposite_way_to_forward():
+    forward = Rig().feed(tone(note_to_hz("C6"), 0.5)).tank_calls[-1][0]
+    reverse = Rig().feed(tone(note_to_hz("C4"), 0.5)).tank_calls[-1][0]
+    assert forward * reverse < 0
 
 
 def test_a_run_through_every_throttle_zone():

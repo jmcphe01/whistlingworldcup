@@ -89,6 +89,11 @@ class ThrottleConfig:
     speed_forward: int = 45
     speed_fast: int = 90
     speed_backward: int = 40
+    # Reverse forward and backward for the double motor. Only the linear motion:
+    # pivots are left as they are, so slides still turn the way they always did.
+    # Set False if the car is ever remounted the other way round.
+    invert_drive: bool = True
+
     speed_turn: int = 28        # deliberately gentle: turns are easy to overshoot
 
 

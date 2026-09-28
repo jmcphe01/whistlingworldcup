@@ -23,6 +23,12 @@ class FakeRobot:
         self.stops += 1
 
 
+# The car is mounted so that "forward" needs negative track speeds, so the shipped
+# default inverts. Tests of the mapping and the rate limiting use the raw one, and
+# the inversion has its own tests below.
+RAW = ThrottleConfig(invert_drive=False)
+
+
 @pytest.fixture
 def robot():
     return FakeRobot()
@@ -30,7 +36,7 @@ def robot():
 
 @pytest.fixture
 def driver(robot):
-    return RobotDriver(robot, ThrottleConfig(), resend_interval=0.5)
+    return RobotDriver(robot, RAW, resend_interval=0.5)
 
 
 def test_stop_is_both_tracks_still():
@@ -38,18 +44,18 @@ def test_stop_is_both_tracks_still():
 
 
 def test_forward_drives_both_tracks_together():
-    config = ThrottleConfig()
+    config = RAW
     left, right = tank_for(Drive.FORWARD, config)
     assert left == right == config.speed_forward
 
 
 def test_fast_is_faster_than_forward():
-    config = ThrottleConfig()
-    assert tank_for(Drive.FORWARD_FAST, config)[0] > tank_for(Drive.FORWARD, config)[0]
+    for config in (RAW, ThrottleConfig()):
+        assert abs(tank_for(Drive.FORWARD_FAST, config)[0]) > abs(tank_for(Drive.FORWARD, config)[0])
 
 
 def test_backward_reverses_both_tracks():
-    left, right = tank_for(Drive.BACKWARD, ThrottleConfig())
+    left, right = tank_for(Drive.BACKWARD, RAW)
     assert left == right < 0
 
 
@@ -114,3 +120,40 @@ def test_stop_also_halts_the_motors_not_just_the_movement(driver, robot):
 def test_last_tank_reports_what_the_robot_was_told(driver):
     driver.apply(0.0, Drive.BACKWARD)
     assert driver.last_tank == (-40, -40)
+
+
+# --- flipping the direction -----------------------------------------------------
+
+INVERTED = ThrottleConfig(invert_drive=True)
+
+
+def test_the_shipped_default_is_flipped():
+    assert ThrottleConfig().invert_drive is True
+
+
+def test_flipped_forward_drives_the_tracks_the_other_way():
+    left, right = tank_for(Drive.FORWARD, INVERTED)
+    assert left == right == -INVERTED.speed_forward
+
+
+def test_flipped_backward_is_positive():
+    left, right = tank_for(Drive.BACKWARD, INVERTED)
+    assert left == right == INVERTED.speed_backward > 0
+
+
+@pytest.mark.parametrize("drive", [Drive.FORWARD, Drive.FORWARD_FAST, Drive.BACKWARD])
+def test_flipping_exactly_mirrors_the_linear_motion(drive):
+    raw, flipped = tank_for(drive, RAW), tank_for(drive, INVERTED)
+    assert flipped == (-raw[0], -raw[1])
+
+
+@pytest.mark.parametrize("drive", [Drive.TURN_LEFT, Drive.TURN_RIGHT, Drive.STOP])
+def test_flipping_leaves_pivots_and_stop_alone(drive):
+    """Inverting a pivot would swap left and right turns."""
+    assert tank_for(drive, INVERTED) == tank_for(drive, RAW)
+
+
+def test_forward_and_backward_still_oppose_each_other_when_flipped():
+    forward = tank_for(Drive.FORWARD, INVERTED)[0]
+    backward = tank_for(Drive.BACKWARD, INVERTED)[0]
+    assert forward * backward < 0
