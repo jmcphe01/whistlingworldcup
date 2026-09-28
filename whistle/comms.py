@@ -35,6 +35,18 @@ def validate_topic(text: str) -> str:
     return topic
 
 
+def validate_message(text: str) -> str:
+    """Clean and check an outcome message typed into the UI.
+
+    Blank is refused because publishing nothing would silently fail to tell the
+    opponent anything, and receiving "" would match every empty payload.
+    """
+    message = (text or "").strip()
+    if not message:
+        raise ValueError("the message is empty")
+    return message
+
+
 def make_resilient_client(broker: str, port: int):
     """An `MQTTClient` that resubscribes after paho reconnects.
 

@@ -190,7 +190,8 @@ def start_monitor(detector: PitchDetector, config: Config, devices, current_inde
     process = multiprocessing.Process(
         target=run_monitor,
         args=(snapshots, detector.band_frequencies, throttle_bounds(config.throttle),
-              devices, current_index, commands, detector.sensitivity, role.value, topic),
+              devices, current_index, commands, detector.sensitivity, role.value, topic,
+              config.mqtt.goal_message, config.mqtt.tagged_message),
         daemon=True,
         name="monitor",
     )
@@ -469,6 +470,8 @@ def push_snapshot(snapshots, now, reading, spectrum_db, intent, interpreter,
         goal_progress=goal.legs_matched,
         goal_pattern=describe_pattern(goal.pattern),
         topic=match.config.topic,
+        goal_message=match.config.goal_message,
+        tagged_message=match.config.tagged_message,
         notice=session.notice,
         gate_thresholds=detector.gate_thresholds,
         sensitivity=detector.sensitivity,

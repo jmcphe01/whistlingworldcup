@@ -151,11 +151,12 @@ class MqttConfig:
     port: int = 1883
     topic: str = "ME193/Rogers"
 
-    # The vocabulary. Agree these with your opponent before the match; they are
-    # compared case-insensitively after stripping whitespace.
+    # The vocabulary. Compared case-insensitively after stripping whitespace, and
+    # editable while the program runs from the monitor. Only the last two are ever
+    # sent by this program: `start` comes from whoever starts the match.
     start_message: str = "start"
-    ball_scored_message: str = "ball scored"
-    ball_tagged_message: str = "ball tagged"
+    goal_message: str = "goal"          # the ball scored; the goalie hears this
+    tagged_message: str = "tagged"      # the goalie reached the ball; the goalie hears this
 
 
 @dataclass(frozen=True)

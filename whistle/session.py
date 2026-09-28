@@ -13,6 +13,7 @@ robot, a broker or a sound card.
 from __future__ import annotations
 
 from whistle.commands import Drive
+from whistle.comms import validate_message
 from whistle.console import HELP
 from whistle.match import Match, MatchRunner, Outcome, Phase, Role
 from whistle.songs import Song
@@ -140,6 +141,23 @@ class Session:
     def _do_reset(self, _value) -> None:
         self._fresh_match("new match, waiting for start.")
 
+    def _do_message(self, value) -> None:
+        """Change what the goal or tagged message says, from the monitor or console."""
+        which, text = value
+        if which not in ("goal", "tagged"):
+            raise ValueError(f"message must be goal or tagged, not {which!r}")
+        message = validate_message(text)
+
+        config = self.match.config
+        other = config.tagged_message if which == "goal" else config.goal_message
+        taken = {config.start_message.strip().lower(), other.strip().lower()}
+        if message.lower() in taken:
+            raise ValueError(f"{message!r} is already used for another message; "
+                             "the two teams could not tell them apart")
+
+        self.match.set_messages(**{which: message})
+        self.say(f"the {which} message is now {message!r}")
+
     def _publish(self, message: str) -> None:
         topic = self.match.config.topic
         self.comms.publish(topic, message)
@@ -152,8 +170,8 @@ class Session:
         config = self.match.config
         self._publish({
             "start": config.start_message,
-            "tagged": config.ball_tagged_message,
-            "scored": config.ball_scored_message,
+            "tagged": config.tagged_message,
+            "scored": config.goal_message,
         }[kind])
 
     def _do_sim_goal(self, _value) -> None:

@@ -23,8 +23,8 @@ Test commands (type one and press Return). You are the other team.
 
   Over MQTT, through the broker and back:
     start            publish the start message
-    tagged           publish the ball-tagged message   (a goalie sings on this)
-    scored           publish the ball-scored message   (a goalie mourns on this)
+    tagged           publish the tagged message   (a goalie sings on this)
+    scored           publish the goal message     (a goalie mourns on this)
     send <text>      publish anything to the topic
 
   Simulated locally, no whistle or sensor needed:
@@ -34,6 +34,7 @@ Test commands (type one and press Return). You are the other team.
   Control:
     role ball|goalie switch role (starts a fresh match)
     topic <name>     change the topic (starts a fresh match)
+    msg goal|tagged <text>   change what those two messages say
     reset            new match, back to waiting for start
     song win|lose    play a song, to check the speakers
     status           role, phase, topic, light sensor
@@ -73,6 +74,11 @@ def parse_console_line(line: str) -> tuple[str, object] | None:
         return (word, rest)
     if word in ("reset", "new"):
         return ("reset", None)
+    if word == "msg":
+        which, _, text = rest.partition(" ")
+        if which.lower() not in ("goal", "tagged") or not text.strip():
+            raise ValueError("msg goal <text>   or   msg tagged <text>")
+        return ("message", (which.lower(), text.strip()))
     if word == "song":
         if rest.lower() not in ("win", "lose"):
             raise ValueError("song win  or  song lose")

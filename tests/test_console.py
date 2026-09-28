@@ -85,3 +85,17 @@ def test_the_thread_stops_at_quit():
 def test_the_thread_ends_quietly_with_no_terminal():
     items, _ = run_console([])
     assert items == []
+
+
+@pytest.mark.parametrize("line, expected", [
+    ("msg goal GOOOAL", ("message", ("goal", "GOOOAL"))),
+    ("msg TAGGED got him now", ("message", ("tagged", "got him now"))),
+])
+def test_messages_can_be_changed_from_the_console(line, expected):
+    assert parse_console_line(line) == expected
+
+
+@pytest.mark.parametrize("line", ["msg", "msg goal", "msg start hello", "msg goal   "])
+def test_a_bad_msg_command_explains_itself(line):
+    with pytest.raises(ValueError):
+        parse_console_line(line)

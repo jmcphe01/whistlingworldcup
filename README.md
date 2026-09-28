@@ -103,8 +103,13 @@ for a desk test with nothing connected (a loopback stands in for the broker and
 the match starts at once), `--device "Scarlett"` to pick an input by name,
 `--broker` and `--topic` to change them trackside, `--list-devices`.
 
-Both roles subscribe to the one topic and wait for `start`. The message wording
-lives in `MqttConfig` so agreeing it with your opponent is a one-line edit.
+Both roles subscribe to the one topic and wait for `start`. This program sends
+exactly two messages, **goal** (the ball scored) and **tagged** (the goalie reached
+the ball), and both are text boxes in the monitor, applied with Return like the
+topic, so the wording can be agreed with your opponent on the day. Changing one
+does not end a running match. Blank messages, and messages that collide with each
+other or with `start`, are refused: the two teams could not tell them apart.
+`start` is only ever received. Its wording is `start_message` in `MqttConfig`.
 
 ### Playing the other team
 
@@ -114,18 +119,18 @@ real robot without a real opponent.
 | command | effect |
 |---|---|
 | `start` | publish the start message (over MQTT, through the broker and back) |
-| `tagged` | publish the ball-tagged message. A goalie sings on this |
-| `scored` | publish the ball-scored message. A goalie mourns on this |
+| `tagged` | publish the tagged message. A goalie sings on this |
+| `scored` | publish the goal message. A goalie mourns on this |
 | `send <text>` | publish anything to the topic |
 | `goal` | pretend the ball whistled the goal command (local) |
 | `tag` | pretend the goalie reached the light sensor (local) |
-| `role ball\|goalie`, `topic <name>`, `reset` | same as the controls in the window |
+| `role ball\|goalie`, `topic <name>`, `msg goal\|tagged <text>`, `reset` | same as the controls in the window |
 | `song win\|lose` | play a song, to check the speakers |
 | `status` | role, phase, topic, light sensor reading against its trigger |
 | `help`, `quit` | |
 
 A worked test of each ending, as the ball: `start`, then either `goal` (publishes
-"ball scored" and plays the winning song) or `tag` (publishes "ball tagged" and
+"goal" and plays the winning song) or `tag` (publishes "tagged" and
 plays the death song); `reset` between them. As the goalie: `role goalie`,
 `start`, then `tagged` (victory song) or `scored` (death song).
 

@@ -63,12 +63,12 @@ def test_the_tagged_ball_stops_publishes_and_dies(ball):
     assert outcome.changed
     assert outcome.stop_robot
     assert outcome.song is Song.DEATH
-    assert outcome.publish == (MqttConfig().ball_tagged_message,)
+    assert outcome.publish == (MqttConfig().tagged_message,)
     assert ball.phase is Phase.OVER
 
 
 def test_the_goalie_celebrates_the_tag(goalie):
-    outcome = started(goalie).on_message(MqttConfig().ball_tagged_message)
+    outcome = started(goalie).on_message(MqttConfig().tagged_message)
     assert outcome.song is Song.VICTORY
     assert goalie.phase is Phase.OVER
 
@@ -78,24 +78,24 @@ def test_the_goalie_celebrates_the_tag(goalie):
 def test_the_scoring_ball_publishes_and_celebrates(ball):
     outcome = started(ball).on_goal_whistle()
     assert outcome.song is Song.VICTORY
-    assert outcome.publish == (MqttConfig().ball_scored_message,)
+    assert outcome.publish == (MqttConfig().goal_message,)
     assert outcome.stop_robot
     assert ball.phase is Phase.OVER
 
 
 def test_the_goalie_mourns_the_goal(goalie):
-    outcome = started(goalie).on_message(MqttConfig().ball_scored_message)
+    outcome = started(goalie).on_message(MqttConfig().goal_message)
     assert outcome.song is Song.DEATH
     assert goalie.phase is Phase.OVER
 
 
 def test_the_two_endings_give_opposite_songs(ball, goalie):
     scored = started(Match(Role.BALL)).on_goal_whistle().song
-    mourned = started(Match(Role.GOALIE)).on_message(MqttConfig().ball_scored_message).song
+    mourned = started(Match(Role.GOALIE)).on_message(MqttConfig().goal_message).song
     assert scored is Song.VICTORY and mourned is Song.DEATH
 
     tagged = started(Match(Role.BALL)).on_proximity().song
-    celebrated = started(Match(Role.GOALIE)).on_message(MqttConfig().ball_tagged_message).song
+    celebrated = started(Match(Role.GOALIE)).on_message(MqttConfig().tagged_message).song
     assert tagged is Song.DEATH and celebrated is Song.VICTORY
 
 
@@ -107,7 +107,7 @@ def test_the_ball_ignores_the_echo_of_its_own_tagged_message(ball):
     react to itself."""
     started(ball)
     ball.on_proximity()
-    echo = ball.on_message(MqttConfig().ball_tagged_message)
+    echo = ball.on_message(MqttConfig().tagged_message)
     assert echo.changed is False
     assert echo.song is None
 
@@ -115,13 +115,13 @@ def test_the_ball_ignores_the_echo_of_its_own_tagged_message(ball):
 def test_the_ball_ignores_the_echo_of_its_own_scored_message(ball):
     started(ball)
     ball.on_goal_whistle()
-    assert ball.on_message(MqttConfig().ball_scored_message).song is None
+    assert ball.on_message(MqttConfig().goal_message).song is None
 
 
 def test_the_goalie_does_not_react_to_outcomes_twice(goalie):
     started(goalie)
-    goalie.on_message(MqttConfig().ball_scored_message)
-    assert goalie.on_message(MqttConfig().ball_tagged_message).changed is False
+    goalie.on_message(MqttConfig().goal_message)
+    assert goalie.on_message(MqttConfig().tagged_message).changed is False
 
 
 # --- role guards ------------------------------------------------------------
@@ -144,7 +144,7 @@ def test_a_finished_match_stays_finished(ball):
 
 def test_the_agreed_message_wording_is_configurable():
     """The wording is agreed with the opponent, so it has to be a config edit."""
-    config = MqttConfig(start_message="GO", ball_tagged_message="BALL_DEAD")
+    config = MqttConfig(start_message="GO", tagged_message="BALL_DEAD")
     ball = Match(Role.BALL, config)
     assert ball.on_message("go").changed
     assert ball.on_proximity().publish == ("BALL_DEAD",)
@@ -190,7 +190,7 @@ def test_the_runner_carries_out_every_effect(runner):
     runner.handle(runner.match.on_proximity())
 
     assert runner.driver.stops == 1
-    assert runner.publisher.sent == [(MqttConfig().topic, MqttConfig().ball_tagged_message)]
+    assert runner.publisher.sent == [(MqttConfig().topic, MqttConfig().tagged_message)]
     assert runner.player.played == [Song.DEATH]
 
 
@@ -255,3 +255,20 @@ def test_the_topic_can_change_and_outcomes_use_it(ball):
     ball.set_topic("ME193/Test")
     assert ball.config.topic == "ME193/Test"
     assert ball.config.start_message == MqttConfig().start_message, "wording untouched"
+
+
+def test_the_two_outcome_messages_default_to_goal_and_tagged():
+    config = MqttConfig()
+    assert (config.goal_message, config.tagged_message) == ("goal", "tagged")
+
+
+def test_messages_can_change_one_at_a_time(ball):
+    ball.set_messages(goal="yes")
+    assert ball.config.goal_message == "yes"
+    assert ball.config.tagged_message == "tagged"
+
+
+def test_a_running_match_keeps_running_after_a_message_change(ball):
+    started(ball)
+    ball.set_messages(tagged="hit")
+    assert ball.running and ball.on_proximity().publish == ("hit",)

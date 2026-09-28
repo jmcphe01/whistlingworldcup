@@ -144,7 +144,7 @@ def test_outcomes_follow_the_new_topic():
     session.handle("topic", "ME193/Test")
     session.on_message("start")
     session.handle("sim_goal")
-    assert comms.sent == [("ME193/Test", VOCAB.ball_scored_message)]
+    assert comms.sent == [("ME193/Test", VOCAB.goal_message)]
 
 
 @pytest.mark.parametrize("bad", ["", "   ", "ME193/#", "ME193/+/x", "/leading"])
@@ -182,7 +182,7 @@ def test_reset_allows_a_second_match():
 def test_the_ball_scoring_publishes_and_sings_the_winning_song():
     session, driver, player, comms = started()
     session.handle("sim_goal")
-    assert comms.sent == [("ME193/Rogers", VOCAB.ball_scored_message)]
+    assert comms.sent == [("ME193/Rogers", VOCAB.goal_message)]
     assert player.played == [Song.VICTORY]
 
 
@@ -190,27 +190,27 @@ def test_the_ball_being_tagged_publishes_and_plays_the_death_song():
     session, driver, player, comms = started()
     stops = driver.stops
     session.handle("sim_tag")
-    assert comms.sent == [("ME193/Rogers", VOCAB.ball_tagged_message)]
+    assert comms.sent == [("ME193/Rogers", VOCAB.tagged_message)]
     assert player.played == [Song.DEATH]
     assert driver.stops > stops, "shut down"
 
 
 def test_the_goalie_sings_success_when_the_ball_is_tagged():
     session, _, player, _ = started(role=Role.GOALIE)
-    session.on_message(VOCAB.ball_tagged_message)
+    session.on_message(VOCAB.tagged_message)
     assert player.played == [Song.VICTORY]
 
 
 def test_the_goalie_plays_the_death_song_when_the_ball_scores():
     session, _, player, _ = started(role=Role.GOALIE)
-    session.on_message(VOCAB.ball_scored_message)
+    session.on_message(VOCAB.goal_message)
     assert player.played == [Song.DEATH]
 
 
 def test_the_ball_does_not_react_to_its_own_echoed_message():
     session, _, player, _ = started()
     session.handle("sim_tag")
-    session.on_message(VOCAB.ball_tagged_message)
+    session.on_message(VOCAB.tagged_message)
     assert player.played == [Song.DEATH], "sang once, not twice"
 
 
@@ -218,8 +218,8 @@ def test_the_ball_does_not_react_to_its_own_echoed_message():
 
 @pytest.mark.parametrize("kind, message", [
     ("start", VOCAB.start_message),
-    ("tagged", VOCAB.ball_tagged_message),
-    ("scored", VOCAB.ball_scored_message),
+    ("tagged", VOCAB.tagged_message),
+    ("scored", VOCAB.goal_message),
 ])
 def test_opponent_commands_publish_the_agreed_wording(kind, message):
     session, _, _, comms = make()
@@ -282,7 +282,7 @@ def test_the_goalie_reaching_the_sensor_ends_the_ball_s_match():
     session.sensor_fake.tripped = True
     session.step(0.0, intent())
     assert player.played == [Song.DEATH]
-    assert comms.sent == [("ME193/Rogers", VOCAB.ball_tagged_message)]
+    assert comms.sent == [("ME193/Rogers", VOCAB.tagged_message)]
 
 
 def test_a_trip_during_warm_up_is_discarded_not_latched():
@@ -328,3 +328,51 @@ def test_status_does_not_change_anything():
     session, *_ = started()
     session.handle("status")
     assert session.match.running
+
+
+# --- the two outcome messages -------------------------------------------------
+
+def test_the_only_messages_sent_are_goal_and_tagged():
+    """Everything the program publishes on its own is one of these two."""
+    session, _, _, comms = started()
+    session.handle("sim_goal")
+    session.handle("reset")
+    session.on_message("start")
+    session.handle("sim_tag")
+    assert [message for _, message in comms.sent] == ["goal", "tagged"]
+
+
+def test_the_messages_can_be_changed_and_the_new_wording_is_published():
+    session, _, _, comms = started()
+    session.handle("message", ("goal", "GOOOAL"))
+    session.handle("sim_goal")
+    assert comms.sent == [("ME193/Rogers", "GOOOAL")]
+
+
+def test_the_new_wording_is_what_the_goalie_listens_for():
+    session, _, player, _ = started(role=Role.GOALIE)
+    session.handle("message", ("tagged", "got him"))
+    session.on_message("tagged")                    # the old wording no longer counts
+    assert player.played == []
+    session.on_message("Got Him")
+    assert player.played == [Song.VICTORY]
+
+
+def test_changing_a_message_does_not_end_a_running_match():
+    session, *_ = started()
+    session.handle("message", ("goal", "yes"))
+    assert session.match.running
+
+
+@pytest.mark.parametrize("which, text", [
+    ("goal", ""), ("goal", "   "),          # nothing to send
+    ("goal", "tagged"), ("goal", "TAGGED"),  # collides with the other message
+    ("tagged", "goal"),
+    ("goal", "start"), ("tagged", "Start"),  # collides with the start message
+    ("nonsense", "hello"),
+])
+def test_unusable_messages_are_refused_and_nothing_changes(which, text):
+    session, *_ = started()
+    before = session.match.config
+    session.handle("message", (which, text))
+    assert session.match.config == before

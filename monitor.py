@@ -57,6 +57,8 @@ class Snapshot:
     goal_progress: int = 0      # legs of the goal warble matched so far
     goal_pattern: str = ""      # e.g. "left > right > left"
     topic: str = ""
+    goal_message: str = ""
+    tagged_message: str = ""
     notice: str = ""            # the latest event, e.g. "received 'start'"
     device: str = ""
     # noise margin, peak/median, peak/2nd peak, sub-harmonic -- in bar order
@@ -254,6 +256,7 @@ def _shutdown(state, fig, plt) -> None:
 
 def run_monitor(snapshots, band_frequencies, boundaries, devices=(), current_device=None,
                 commands=None, sensitivity=5.0, role="ball", topic="",
+                goal_message="goal", tagged_message="tagged",
                 title="Whistling World Cup"):
     """Process entry point. Reads snapshots until it receives None."""
     import matplotlib.pyplot as plt
@@ -267,9 +270,9 @@ def run_monitor(snapshots, band_frequencies, boundaries, devices=(), current_dev
     # A fixed grid rather than constrained_layout: the control strip needs a
     # known position to hang its widgets off, and dropdown lists have to be
     # figure-level axes (see Dropdown).
-    fig = plt.figure(figsize=(12, 8.4))
+    fig = plt.figure(figsize=(12, 9.0))
     fig.canvas.manager.set_window_title(title)
-    grid = fig.add_gridspec(3, 2, height_ratios=[3, 3, 1.15], left=0.125, right=0.985,
+    grid = fig.add_gridspec(3, 2, height_ratios=[3, 3, 1.75], left=0.125, right=0.985,
                             top=0.955, bottom=0.03, hspace=0.45, wspace=0.22)
     spectrum_ax = fig.add_subplot(grid[0, 0])
     track_ax = fig.add_subplot(grid[0, 1])
@@ -331,7 +334,8 @@ def run_monitor(snapshots, band_frequencies, boundaries, devices=(), current_dev
     readout = readout_ax.text(0.02, 0.97, "", va="top", ha="left", fontsize=10,
                               family="monospace", transform=readout_ax.transAxes)
 
-    state = {"latest": None, "running": True, "topic": topic}
+    state = {"latest": None, "running": True, "topic": topic,
+             "goal_message": goal_message, "tagged_message": tagged_message}
 
     def request(kind, value=None):
         """Post a request to the audio loop. It owns the match, not us."""
@@ -346,28 +350,50 @@ def run_monitor(snapshots, band_frequencies, boundaries, devices=(), current_dev
     roles = [("ball", "ball"), ("goalie", "goalie")]
     role_dropdown = Dropdown(
         roles, role, lambda value: request("role", value), prefix="role",
-        make_axes=fig.add_axes, button_bounds=at(0.0, 0.55, 0.14, 0.40),
+        make_axes=fig.add_axes, button_bounds=at(0.0, 0.70, 0.14, 0.26),
         list_bounds=list_above(0.0, 0.14, len(roles)))
 
-    topic_box = TextBox(fig.add_axes(at(0.215, 0.55, 0.27, 0.40)), "topic ", initial=topic)
+    topic_box = TextBox(fig.add_axes(at(0.215, 0.70, 0.27, 0.26)), "topic ", initial=topic)
     topic_box.label.set_fontsize(9)
     topic_box.text_disp.set_fontsize(9)
 
     def submit_topic(text):
         text = text.strip()
         if text and text != state["topic"]:
+            # Optimistic: Return and then clicking away both submit, and the main
+            # loop has not confirmed the first by the time the second arrives. The
+            # next snapshot puts the true value back, so a rejection self-corrects.
+            state["topic"] = text
             request("topic", text)
 
     topic_box.on_submit(submit_topic)     # Return, or clicking away
+
+    def message_box(label, key, x, w, initial):
+        """A text box for one outcome message, applied on Return like the topic."""
+        box = TextBox(fig.add_axes(at(x, 0.38, w, 0.26)), label, initial=initial)
+        box.label.set_fontsize(9)
+        box.text_disp.set_fontsize(9)
+
+        def submit(text):
+            text = text.strip()
+            if text and text != state[key]:
+                state[key] = text      # optimistic; see submit_topic
+                request("message", (key.replace("_message", ""), text))
+
+        box.on_submit(submit)
+        return box
+
+    goal_box = message_box("goal msg ", "goal_message", 0.215, 0.27, goal_message)
+    tagged_box = message_box("tagged msg ", "tagged_message", 0.665, 0.32, tagged_message)
 
     mic_dropdown = None
     if devices:
         mic_dropdown = DeviceSelector(
             None, devices, current_device, lambda index: request("device", index),
-            make_axes=fig.add_axes, button_bounds=at(0.53, 0.55, 0.28, 0.40),
+            make_axes=fig.add_axes, button_bounds=at(0.53, 0.70, 0.28, 0.26),
             list_bounds=list_above(0.53, 0.28, len(devices)))
 
-    new_match = Button(fig.add_axes(at(0.84, 0.55, 0.15, 0.40)), "new match",
+    new_match = Button(fig.add_axes(at(0.84, 0.70, 0.15, 0.26)), "new match",
                        hovercolor="0.88")
     new_match.label.set_fontsize(9)
     new_match.on_clicked(lambda _event: request("reset"))
@@ -375,7 +401,7 @@ def run_monitor(snapshots, band_frequencies, boundaries, devices=(), current_dev
     # Sensitivity scales all four gate thresholds at once. The marks on the gate
     # panel are drawn from the values that come back in each snapshot, so
     # dragging this visibly moves them -- the slider explains itself.
-    sensitivity_slider = Slider(fig.add_axes(at(0.06, 0.06, 0.34, 0.30)), "sens ",
+    sensitivity_slider = Slider(fig.add_axes(at(0.06, 0.06, 0.34, 0.22)), "sens ",
                                 SENSITIVITY_MIN, SENSITIVITY_MAX,
                                 valinit=sensitivity, valstep=0.5, valfmt="%.1f")
     sensitivity_slider.label.set_fontsize(9)
@@ -384,7 +410,7 @@ def run_monitor(snapshots, band_frequencies, boundaries, devices=(), current_dev
     # rather than once per pixel.
     sensitivity_slider.on_changed(lambda value: request("sensitivity", value))
 
-    notice = fig.text(strip.x0 + 0.44 * strip.width, strip.y0 + 0.21 * strip.height, "",
+    notice = fig.text(strip.x0 + 0.44 * strip.width, strip.y0 + 0.17 * strip.height, "",
                       fontsize=9, va="center", ha="left", color="0.25")
 
     def drain():
@@ -448,6 +474,12 @@ def run_monitor(snapshots, band_frequencies, boundaries, devices=(), current_dev
         if snapshot.topic and not topic_box.capturekeystrokes \
                 and topic_box.text != snapshot.topic:
             topic_box.set_val(snapshot.topic)      # dedupes against state["topic"]
+
+        for key, box, live in (("goal_message", goal_box, snapshot.goal_message),
+                               ("tagged_message", tagged_box, snapshot.tagged_message)):
+            state[key] = live or state[key]
+            if live and not box.capturekeystrokes and box.text != live:
+                box.set_val(live)      # dedupes against state[key]
 
         colour = ZONE_COLOURS.get(snapshot.drive, "0.2")
         note = snapshot.note or "--"
