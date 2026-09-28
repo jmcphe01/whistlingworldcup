@@ -26,7 +26,7 @@ Test commands (type one and press Return). You are the other team.
     start            publish the start message
     tagged           publish the tagged message   (a goalie sings on this)
     scored           publish the goal message     (a goalie mourns on this)
-    pivot <angle>    publish a couch command, e.g. pivot 90 or pivot -45
+    pivot <angle>    publish a single motor command, e.g. pivot 90 or pivot -45
     send <text>      publish anything to the topic
 
   Simulated locally, no whistle or sensor needed:

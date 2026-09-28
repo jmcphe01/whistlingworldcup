@@ -146,7 +146,7 @@ What each ending does, for both roles:
 | ball scores | publishes scored, winning song | hears scored, death song |
 | ball tagged | publishes tagged, death song, stops | hears tagged, winning song |
 
-### The couch
+### The single motor
 
 A single motor that a partner turns by MQTT message: **pivot[angle]**, for example
 `pivot[90]` or `pivot[-45]`. The motor turns by that many degrees, and a negative
@@ -159,10 +159,10 @@ touches it. The session recognises the message first, so it never reaches the ma
 rules.
 
 Only the bracketed form is claimed, with case and spaces ignored (`Pivot [ -45 ]`
-works). A bare `pivot` is not a couch message and goes to the match rules. Brackets
+works). A bare `pivot` is not a single motor message and goes to the match rules. Brackets
 with no readable number, like `pivot[abc]`, are reported rather than ignored. Angles
 are rounded to a whole degree, `pivot[0]` does nothing, and an angle past
-`couch_max_degrees` (3600, ten turns) is refused so a mistyped `pivot[9000000]` cannot
+`single_motor_max_degrees` (3600, ten turns) is refused so a mistyped `pivot[9000000]` cannot
 spin the motor for minutes.
 
 The turn is started without waiting for it to finish. Waiting would stall the loop
@@ -171,11 +171,11 @@ meanwhile. That also means a new pivot arriving mid-turn is sent straight away, 
 what the hub does with two overlapping turns is untested. The motor is stopped when
 the program exits, in case it is mid-turn.
 
-In `HardwareConfig`, `couch_speed` sets the speed (percent) and `couch_invert` flips
+In `HardwareConfig`, `single_motor_speed` sets the speed (percent) and `single_motor_invert` flips
 which way a positive angle turns, if it comes out the wrong way for how the motor is
 mounted. The word is `pivot_message` in `MqttConfig`, and the game messages cannot be
 reworded to collide with it. If the motor fails to connect the program carries on with
-a warning, and `--no-couch` skips it. To test it alone, type `pivot 90` or `pivot -45`
+a warning, and `--no-single-motor` skips it. To test it alone, type `pivot 90` or `pivot -45`
 in the console: it publishes the exact `pivot[90]` form your partner would send, so
 the whole path is exercised.
 

@@ -15,14 +15,14 @@ from __future__ import annotations
 from whistle.commands import Drive
 from whistle.comms import validate_message
 from whistle.console import HELP
-from whistle.couch import parse_command
+from whistle.single_motor import parse_command
 from whistle.match import Match, MatchRunner, Outcome, Phase, Role
 from whistle.songs import Song
 
 
 class Session:
     def __init__(self, match: Match, runner: MatchRunner, driver, interpreter, comms,
-                 player=None, sensor=None, couch=None, log=print):
+                 player=None, sensor=None, single_motor=None, log=print):
         self.match = match
         self.runner = runner
         self.driver = driver
@@ -30,7 +30,7 @@ class Session:
         self.comms = comms
         self.player = player
         self.sensor = sensor
-        self.couch = couch
+        self.single_motor = single_motor
         self._log = log
 
         self.notice = ""            # the latest event, shown in the monitor
@@ -54,8 +54,8 @@ class Session:
             self._announced = self.match.phase
             self._log(f"  phase: {self.match.phase.value}")
 
-    def couch_state(self) -> str:
-        return "not connected" if self.couch is None else self.couch.state
+    def single_motor_state(self) -> str:
+        return "not connected" if self.single_motor is None else self.single_motor.state
 
     def light_readout(self) -> str:
         if self.sensor is None:
@@ -90,18 +90,18 @@ class Session:
         """A payload from the shared topic."""
         self.say(f"received {payload!r}")
 
-        # Couch commands are recognised first and never reach the match rules.
+        # Single motor commands are recognised first and never reach the match rules.
         try:
             angle = parse_command(payload, self.match.config)
         except ValueError as error:
-            self.say(str(error))        # it was plainly meant for the couch
+            self.say(str(error))        # it was plainly meant for the single motor
             return
         if angle is not None:
-            if self.couch is None:
-                self.say("couch command ignored: no single motor is connected")
+            if self.single_motor is None:
+                self.say("single motor command ignored: it is not connected")
             else:
                 try:
-                    self.say(f"couch: {self.couch.pivot(angle)}")
+                    self.say(f"single motor: {self.single_motor.pivot(angle)}")
                 except ValueError as error:
                     self.say(str(error))
             return
@@ -203,7 +203,7 @@ class Session:
         }[kind])
 
     def _do_pivot(self, value) -> None:
-        """Publish a couch command, as the partner would: pivot[<angle>]."""
+        """Publish a single motor command, as the partner would: pivot[<angle>]."""
         try:
             float(value)
         except (TypeError, ValueError):

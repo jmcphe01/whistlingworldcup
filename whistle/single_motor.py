@@ -1,4 +1,4 @@
-"""The couch: a single motor that a partner turns by MQTT message.
+"""The single motor: a motor that a partner turns by MQTT message.
 
 The partner sends `pivot[<angle>]`, for example `pivot[90]` or `pivot[-45]`, and the
 motor turns by that many degrees. Positive is one way and negative the other.
@@ -9,10 +9,10 @@ a match never touches it. The commands arrive on the same topic as the match
 messages, so the session recognises them first and they never reach the match rules
 (which would otherwise log them as unknown messages).
 
-Only the bracketed form is claimed. A bare `pivot`, or anything else, is not a couch
+Only the bracketed form is claimed. A bare `pivot`, or anything else, is not a single motor
 message and goes to the match rules like any other payload; a bracketed message with
 no readable number is reported rather than ignored, since it was plainly meant for
-the couch.
+the single motor.
 """
 
 from __future__ import annotations
@@ -52,7 +52,7 @@ def parse_command(payload: str, mqtt: MqttConfig) -> float | None:
     return angle
 
 
-class CouchMotor:
+class SingleMotor:
     """Turns a single motor by an angle."""
 
     def __init__(self, motor, hardware: HardwareConfig | None = None, log=print):
@@ -70,34 +70,34 @@ class CouchMotor:
     def pivot(self, angle: float) -> str:
         """Turn by `angle` degrees. Returns a description for the log.
 
-        Positive is clockwise and negative counter-clockwise, unless `couch_invert`
+        Positive is clockwise and negative counter-clockwise, unless `single_motor_invert`
         is set. The angle is rounded to a whole degree. Zero does nothing. An angle
-        beyond `couch_max_degrees` is refused, so a typo like pivot[9000000] cannot
+        beyond `single_motor_max_degrees` is refused, so a typo like pivot[9000000] cannot
         spin the motor for minutes.
 
         The turn is started without waiting for it to finish. Waiting would stall
         the loop that is listening for whistles, and the car would keep driving on
         its last command while it did.
 
-        A Bluetooth failure is reported and swallowed: a lost couch command must not
+        A Bluetooth failure is reported and swallowed: a lost single motor command must not
         take down the loop that is driving the robot.
         """
         degrees = int(round(angle))
         if degrees == 0:
             return "no turn (0 degrees)"
-        limit = self.hardware.couch_max_degrees
+        limit = self.hardware.single_motor_max_degrees
         if abs(degrees) > limit:
             raise ValueError(f"{degrees} degrees is past the {limit} degree limit")
 
-        clockwise = (degrees > 0) != self.hardware.couch_invert
+        clockwise = (degrees > 0) != self.hardware.single_motor_invert
         direction = (MOTOR_MOVE_DIRECTION_CLOCKWISE if clockwise
                      else MOTOR_MOVE_DIRECTION_COUNTERCLOCKWISE)
         try:
             self.motor.motor_run_for_degrees(
-                abs(degrees), direction=direction, speed=self.hardware.couch_speed,
+                abs(degrees), direction=direction, speed=self.hardware.single_motor_speed,
                 blocking=False)
         except Exception as error:
-            self._log(f"  [couch] pivot failed: {error}")
+            self._log(f"  [single motor] pivot failed: {error}")
             return f"pivot {degrees:+d} degrees failed ({error})"
 
         self._state = f"pivoted {degrees:+d} deg"
@@ -108,5 +108,5 @@ class CouchMotor:
         try:
             self.motor.stop()
         except Exception as error:
-            self._log(f"  [couch] stop failed: {error}")
+            self._log(f"  [single motor] stop failed: {error}")
         self._state = "idle"

@@ -1,4 +1,4 @@
-"""The couch motor: a single motor a partner turns by pivot[<angle>]."""
+"""The single motor: a single motor a partner turns by pivot[<angle>]."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from legoeducation import MOTOR_MOVE_DIRECTION_COUNTERCLOCKWISE as COUNTERCLOCKW
 from config import HardwareConfig, MqttConfig
 from tests.test_session import VOCAB, make, started
 from whistle.console import parse_console_line
-from whistle.couch import CouchMotor, parse_command
+from whistle.single_motor import SingleMotor, parse_command
 from whistle.match import Phase, Role
 
 
@@ -29,8 +29,8 @@ class FakeMotor:
 
 
 @pytest.fixture
-def couch():
-    return CouchMotor(FakeMotor(), HardwareConfig(), log=lambda _: None)
+def single_motor():
+    return SingleMotor(FakeMotor(), HardwareConfig(), log=lambda _: None)
 
 
 # --- reading the message ------------------------------------------------------
@@ -47,9 +47,9 @@ def test_the_angle_is_read_from_the_brackets(payload, angle):
 
 @pytest.mark.parametrize("payload", [
     "", "pivot", "pivot 90", "pivot(90)", "start", "goal", "tagged",
-    "pivot[90", "pivot90]", "xpivot[90]", "pivot[90]x", "couchleft",
+    "pivot[90", "pivot90]", "xpivot[90]", "pivot[90]x", "spinleft",
 ])
-def test_anything_not_bracketed_is_not_a_couch_message(payload):
+def test_anything_not_bracketed_is_not_a_single_motor_message(payload):
     """Only the bracketed form is claimed; the rest goes to the match rules."""
     assert parse_command(payload, MqttConfig()) is None
 
@@ -69,79 +69,79 @@ def test_the_word_is_configurable():
 
 # --- turning the motor --------------------------------------------------------
 
-def test_a_positive_angle_turns_clockwise(couch):
-    couch.pivot(90)
-    assert couch.motor.turns == [(90, CLOCKWISE, HardwareConfig().couch_speed, False)]
+def test_a_positive_angle_turns_clockwise(single_motor):
+    single_motor.pivot(90)
+    assert single_motor.motor.turns == [(90, CLOCKWISE, HardwareConfig().single_motor_speed, False)]
 
 
-def test_a_negative_angle_turns_the_other_way_by_its_size(couch):
+def test_a_negative_angle_turns_the_other_way_by_its_size(single_motor):
     """The library takes an unsigned angle and a direction, so -45 is 45 counter-
     clockwise, not a negative angle passed through."""
-    couch.pivot(-45)
-    assert couch.motor.turns == [(45, COUNTERCLOCKWISE, HardwareConfig().couch_speed, False)]
+    single_motor.pivot(-45)
+    assert single_motor.motor.turns == [(45, COUNTERCLOCKWISE, HardwareConfig().single_motor_speed, False)]
 
 
 def test_the_direction_can_be_inverted_for_how_it_is_mounted():
     motor = FakeMotor()
-    CouchMotor(motor, HardwareConfig(couch_invert=True), log=lambda _: None).pivot(90)
+    SingleMotor(motor, HardwareConfig(single_motor_invert=True), log=lambda _: None).pivot(90)
     assert motor.turns[0][1] == COUNTERCLOCKWISE
 
 
-def test_the_turn_does_not_wait_for_the_motor(couch):
+def test_the_turn_does_not_wait_for_the_motor(single_motor):
     """Waiting would stall the loop that listens for whistles, and the car would
     keep driving on its last command meanwhile."""
-    couch.pivot(720)
-    assert couch.motor.turns[0][3] is False
+    single_motor.pivot(720)
+    assert single_motor.motor.turns[0][3] is False
 
 
-def test_fractional_angles_are_rounded_to_whole_degrees(couch):
-    couch.pivot(89.6)
-    assert couch.motor.turns[0][0] == 90
+def test_fractional_angles_are_rounded_to_whole_degrees(single_motor):
+    single_motor.pivot(89.6)
+    assert single_motor.motor.turns[0][0] == 90
 
 
-def test_zero_does_nothing(couch):
-    assert "no turn" in couch.pivot(0)
-    assert couch.motor.turns == []
+def test_zero_does_nothing(single_motor):
+    assert "no turn" in single_motor.pivot(0)
+    assert single_motor.motor.turns == []
 
 
-def test_a_fraction_that_rounds_to_zero_does_nothing(couch):
-    couch.pivot(0.4)
-    assert couch.motor.turns == []
+def test_a_fraction_that_rounds_to_zero_does_nothing(single_motor):
+    single_motor.pivot(0.4)
+    assert single_motor.motor.turns == []
 
 
-def test_a_huge_angle_is_refused(couch):
+def test_a_huge_angle_is_refused(single_motor):
     """A mistyped pivot[9000000] must not spin the motor for minutes."""
     with pytest.raises(ValueError, match="limit"):
-        couch.pivot(9_000_000)
-    assert couch.motor.turns == []
+        single_motor.pivot(9_000_000)
+    assert single_motor.motor.turns == []
 
 
-def test_the_limit_itself_is_allowed(couch):
-    limit = HardwareConfig().couch_max_degrees
-    couch.pivot(limit)
-    couch.pivot(-limit)
-    assert len(couch.motor.turns) == 2
+def test_the_limit_itself_is_allowed(single_motor):
+    limit = HardwareConfig().single_motor_max_degrees
+    single_motor.pivot(limit)
+    single_motor.pivot(-limit)
+    assert len(single_motor.motor.turns) == 2
 
 
-def test_the_state_reports_the_last_turn(couch):
-    assert couch.state == "idle"
-    couch.pivot(90)
-    assert "+90" in couch.state
-    couch.pivot(-45)
-    assert "-45" in couch.state
+def test_the_state_reports_the_last_turn(single_motor):
+    assert single_motor.state == "idle"
+    single_motor.pivot(90)
+    assert "+90" in single_motor.state
+    single_motor.pivot(-45)
+    assert "-45" in single_motor.state
 
 
-def test_shutdown_stops_a_motor_that_is_mid_turn(couch):
-    couch.pivot(3000)
-    couch.shutdown()
-    assert couch.motor.stops == 1 and couch.state == "idle"
+def test_shutdown_stops_a_motor_that_is_mid_turn(single_motor):
+    single_motor.pivot(3000)
+    single_motor.shutdown()
+    assert single_motor.motor.stops == 1 and single_motor.state == "idle"
 
 
-def test_a_bluetooth_failure_is_swallowed_and_the_state_is_kept(couch):
-    couch.pivot(90)
-    couch.motor.fail = True
-    assert "failed" in couch.pivot(45)
-    assert "+90" in couch.state, "the motor was never told about the second turn"
+def test_a_bluetooth_failure_is_swallowed_and_the_state_is_kept(single_motor):
+    single_motor.pivot(90)
+    single_motor.motor.fail = True
+    assert "failed" in single_motor.pivot(45)
+    assert "+90" in single_motor.state, "the motor was never told about the second turn"
 
 
 def test_a_failing_stop_at_shutdown_does_not_raise():
@@ -149,96 +149,96 @@ def test_a_failing_stop_at_shutdown_does_not_raise():
         def stop(self):
             raise OSError("gone")
 
-    CouchMotor(BadStop(), HardwareConfig(), log=lambda _: None).shutdown()
+    SingleMotor(BadStop(), HardwareConfig(), log=lambda _: None).shutdown()
 
 
 # --- through the session ------------------------------------------------------
 
-def make_with_couch(role=Role.BALL):
+def make_with_single_motor(role=Role.BALL):
     session, driver, player, comms = make(role=role)
-    session.couch = CouchMotor(FakeMotor(), HardwareConfig(), log=lambda _: None)
+    session.single_motor = SingleMotor(FakeMotor(), HardwareConfig(), log=lambda _: None)
     return session, driver, player, comms
 
 
-def test_a_pivot_message_turns_the_couch():
-    session, *_ = make_with_couch()
+def test_a_pivot_message_turns_the_single_motor():
+    session, *_ = make_with_single_motor()
     session.on_message("pivot[-30]")
-    assert session.couch.motor.turns[0][:2] == (30, COUNTERCLOCKWISE)
+    assert session.single_motor.motor.turns[0][:2] == (30, COUNTERCLOCKWISE)
 
 
 @pytest.mark.parametrize("role", list(Role))
 def test_it_works_in_either_role(role):
-    session, *_ = make_with_couch(role)
+    session, *_ = make_with_single_motor(role)
     session.on_message("pivot[90]")
-    assert len(session.couch.motor.turns) == 1
+    assert len(session.single_motor.motor.turns) == 1
 
 
 def test_it_works_before_the_match_starts_and_after_it_ends():
-    session, *_ = make_with_couch()
+    session, *_ = make_with_single_motor()
     assert session.match.phase is Phase.WAITING
     session.on_message("pivot[10]")
     session.on_message("start")
     session.handle("sim_goal")
     assert session.match.phase is Phase.OVER
     session.on_message("pivot[20]")
-    assert [t[0] for t in session.couch.motor.turns] == [10, 20]
+    assert [t[0] for t in session.single_motor.motor.turns] == [10, 20]
 
 
 def test_a_pivot_message_never_reaches_the_match_rules():
     """It would otherwise be logged as an unknown message, and could never start
     or end a match."""
-    session, _, player, comms = make_with_couch()
+    session, _, player, comms = make_with_single_motor()
     session.on_message("pivot[45]")
     assert session.match.phase is Phase.WAITING
     assert "unknown" not in session.notice and player.played == [] and comms.sent == []
 
 
 def test_a_bare_pivot_is_not_claimed_and_goes_to_the_match():
-    session, *_ = make_with_couch()
+    session, *_ = make_with_single_motor()
     session.on_message("pivot")
-    assert session.couch.motor.turns == []
+    assert session.single_motor.motor.turns == []
     assert "unknown" in session.notice
 
 
 def test_a_malformed_pivot_is_reported_and_turns_nothing():
-    session, *_ = make_with_couch()
+    session, *_ = make_with_single_motor()
     session.on_message("pivot[abc]")
-    assert session.couch.motor.turns == []
+    assert session.single_motor.motor.turns == []
     assert "could not read an angle" in session.notice
 
 
 def test_a_huge_angle_is_reported_and_turns_nothing():
-    session, *_ = make_with_couch()
+    session, *_ = make_with_single_motor()
     session.on_message("pivot[9000000]")
-    assert session.couch.motor.turns == [] and "limit" in session.notice
+    assert session.single_motor.motor.turns == [] and "limit" in session.notice
 
 
-def test_matches_and_role_changes_do_not_touch_the_couch():
-    session, *_ = make_with_couch()
+def test_matches_and_role_changes_do_not_touch_the_single_motor():
+    session, *_ = make_with_single_motor()
     session.on_message("pivot[90]")
     session.on_message("start")
     session.handle("sim_tag")
     session.handle("reset")
     session.handle("role", "goalie")
     session.handle("topic", "ME193/Test")
-    assert len(session.couch.motor.turns) == 1 and session.couch.motor.stops == 0
+    assert len(session.single_motor.motor.turns) == 1 and session.single_motor.motor.stops == 0
 
 
 def test_with_no_motor_connected_it_says_so_rather_than_failing():
     session, *_ = make()
     session.on_message("pivot[90]")
-    assert "no single motor" in session.notice
+    assert "not connected" in session.notice
 
 
 def test_the_state_is_reported_for_the_monitor():
     session, *_ = make()
-    assert session.couch_state() == "not connected"
-    session, *_ = make_with_couch()
+    assert session.single_motor_state() == "not connected"
+    session, *_ = make_with_single_motor()
     session.on_message("pivot[90]")
-    assert "+90" in session.couch_state()
+    assert "+90" in session.single_motor_state()
 
 
-def test_game_messages_cannot_be_reworded_to_the_couch_word():
+def test_game_messages_cannot_be_reworded_to_the_single_motor_word():
     session, *_ = started()
     session.handle("message", ("goal", "pivot"))
     assert session.match.config.goal_message == VOCAB.goal_message
@@ -274,12 +274,12 @@ def test_the_console_uses_the_configured_word():
 
 
 def test_a_console_pivot_round_trips_through_the_parser():
-    """What the console sends is exactly what the couch reads back."""
-    session, _, _, comms = make_with_couch()
+    """What the console sends is exactly what the single motor reads back."""
+    session, _, _, comms = make_with_single_motor()
     session.handle("pivot", "-45")
     _, message = comms.sent[0]
     session.on_message(message)
-    assert session.couch.motor.turns[0][:2] == (45, COUNTERCLOCKWISE)
+    assert session.single_motor.motor.turns[0][:2] == (45, COUNTERCLOCKWISE)
 
 
 def test_a_non_numeric_console_angle_is_refused():
