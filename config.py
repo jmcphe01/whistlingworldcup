@@ -167,6 +167,10 @@ class HardwareConfig:
     # How often a held note is re-beeped. The hub's beep has no duration, so a
     # long note is a run of beeps; tune this by ear with `song win` / `song lose`.
     beep_sustain_seconds: float = 0.3
+    # Octaves to transpose the songs up on the beeper. The beeper has no volume
+    # control, and a small speaker is louder higher up; capped so no note passes
+    # the hardware's 2700 Hz limit. 0 plays them as written.
+    beep_octave_shift: int = 1
 
 
 @dataclass(frozen=True)

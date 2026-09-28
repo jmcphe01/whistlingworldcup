@@ -154,7 +154,8 @@ class FakeBeeper:
 
 def play(song, sustain=0.3):
     robot, slept = FakeBeeper(), []
-    player = BeepPlayer(robot, sustain, sleep=slept.append, log=lambda _: None)
+    player = BeepPlayer(robot, sustain, octave_shift=0, sleep=slept.append,
+                        log=lambda _: None)
     player.play(song)
     return robot, slept, player
 
@@ -189,7 +190,7 @@ def test_beeps_do_not_wait_on_bluetooth():
 
 def test_rests_are_silent_but_take_their_time():
     robot, slept, _ = play(Song.DEATH, sustain=10.0)
-    assert any(t == pytest.approx(0.05) for t in slept)
+    assert any(t == pytest.approx(0.08) for t in slept)
     assert len(robot.events) == 8, "a rest sends nothing"
 
 
@@ -206,7 +207,7 @@ def test_the_song_takes_as_long_as_it_says():
 def test_a_failing_beeper_does_not_crash_the_end_of_a_match():
     robot, slept, player = FakeBeeper(), [], None
     robot.fail = True
-    player = BeepPlayer(robot, 0.3, sleep=slept.append, log=lambda _: None)
+    player = BeepPlayer(robot, 0.3, octave_shift=0, sleep=slept.append, log=lambda _: None)
     player.play(Song.DEATH)
     assert player.failures > 0
     assert sum(slept) == pytest.approx(duration(MELODIES[Song.DEATH]))
@@ -217,3 +218,68 @@ def test_a_failure_is_reported_once_not_for_every_note():
     robot.fail = True
     BeepPlayer(robot, 0.3, sleep=lambda _: None, log=messages.append).play(Song.VICTORY)
     assert len(messages) == 1
+
+
+# --- louder: transposing up, and playing on both --------------------------------
+
+def beeps_at(song, octave_shift):
+    robot = FakeBeeper()
+    BeepPlayer(robot, 10.0, octave_shift, sleep=lambda _: None, log=lambda _: None).play(song)
+    return beeps(robot)
+
+
+def test_the_beeper_plays_an_octave_higher_by_default():
+    written = beeps_at(Song.VICTORY, 0)
+    assert beeps_at(Song.VICTORY, 1) == pytest.approx([hz * 2 for hz in written], abs=1)
+
+
+def test_a_shift_of_zero_plays_the_songs_as_written():
+    assert beeps_at(Song.DEATH, 0) == [round(note_to_hz(n)) for n in names(Song.DEATH)]
+
+
+@pytest.mark.parametrize("song", list(Song))
+@pytest.mark.parametrize("shift", [1, 2, 3])
+def test_no_note_ever_passes_the_hardware_limit(song, shift):
+    assert max(beeps_at(song, shift)) <= BeepPlayer.MAX_HZ
+
+
+def test_too_high_a_shift_lowers_the_whole_song_rather_than_flattening_it():
+    """Clamping single notes would turn the top of the melody into one repeated
+    pitch. Backing the whole song down an octave keeps its shape."""
+    heard = beeps_at(Song.VICTORY, 3)
+    assert len(set(heard)) == len(set(beeps_at(Song.VICTORY, 1)))
+
+
+def test_the_losing_notes_are_held_long():
+    womps = [n.seconds for n in MELODIES[Song.DEATH] if n.name is not None]
+    assert all(seconds >= 0.6 for seconds in womps)
+    assert womps[-1] >= 1.5
+
+
+class Recorder:
+    def __init__(self):
+        self.calls = []
+
+    def play(self, song, wait=True):
+        self.calls.append(("play", song, wait))
+        return 1.0
+
+    def close(self):
+        self.calls.append(("close",))
+
+
+def test_playing_on_both_starts_the_laptop_without_waiting_and_the_robot_waits():
+    from whistle.songs import PlayerPair
+
+    beeper, speaker = Recorder(), Recorder()
+    PlayerPair(beeper, speaker).play(Song.VICTORY)
+    assert speaker.calls == [("play", Song.VICTORY, False)]
+    assert beeper.calls == [("play", Song.VICTORY, True)]
+
+
+def test_closing_a_pair_closes_both():
+    from whistle.songs import PlayerPair
+
+    beeper, speaker = Recorder(), Recorder()
+    PlayerPair(beeper, speaker).close()
+    assert beeper.calls == [("close",)] and speaker.calls == [("close",)]

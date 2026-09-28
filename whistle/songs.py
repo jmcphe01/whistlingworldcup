@@ -11,6 +11,7 @@ speaker is louder than the note.
 
 from __future__ import annotations
 
+import math
 import os
 import time
 from dataclasses import dataclass
@@ -48,7 +49,7 @@ class Song(Enum):
 # sits inside the beeper's 0-2700 Hz range. Only its first two lines are here: they
 # are the part everyone recognises, and the rhythm is approximate. The losing song
 # is the classic "womp womp womp womp": four notes, each a half step below the last,
-# with the final one held.
+# with each one held and the last held longest.
 _EIGHTH = 0.22
 
 MELODIES: dict[Song, tuple[Note, ...]] = {
@@ -60,10 +61,10 @@ MELODIES: dict[Song, tuple[Note, ...]] = {
         Note("G5", 2 * _EIGHTH), Note("G5", _EIGHTH), Note("F5", 3 * _EIGHTH),
     ),
     Song.DEATH: (
-        Note("Bb5", 0.35), Note(None, 0.05),
-        Note("A5", 0.35), Note(None, 0.05),
-        Note("Ab5", 0.35), Note(None, 0.05),
-        Note("G5", 1.0),
+        Note("Bb5", 0.6), Note(None, 0.08),
+        Note("A5", 0.6), Note(None, 0.08),
+        Note("Ab5", 0.6), Note(None, 0.08),
+        Note("G5", 1.8),
     ),
 }
 
@@ -130,26 +131,38 @@ class BeepPlayer:
 
     MAX_HZ = 2700       # the hardware's limit
 
-    def __init__(self, robot, sustain_seconds: float = 0.3, sleep=time.sleep,
-                 log=print):
+    def __init__(self, robot, sustain_seconds: float = 0.3, octave_shift: int = 1,
+                 sleep=time.sleep, log=print):
         self.robot = robot
         self.sustain_seconds = sustain_seconds
+        # A small speaker is weak at low pitches and loudest higher up, and the
+        # beeper has no volume control, so pitch is the one lever for loudness.
+        self.octave_shift = octave_shift
         self._sleep = sleep
         self._log = log
         self.failures = 0
 
     def play(self, song: Song, wait: bool = True) -> float:
         melody = MELODIES[song]
+        factor = 2.0 ** self.shift_for(melody)
         for note in melody:
-            self._play_note(note)
+            self._play_note(note, factor)
         return duration(melody)
 
-    def _play_note(self, note: Note) -> None:
+    def shift_for(self, melody) -> int:
+        """The octave shift actually used: as configured, but never so high that
+        the top note passes the hardware's limit. Clamping single notes instead
+        would flatten the melody; lowering the whole song keeps its shape."""
+        top = max((n.frequency for n in melody if n.frequency is not None), default=1.0)
+        room = math.floor(math.log2(self.MAX_HZ / top))
+        return min(self.octave_shift, room)
+
+    def _play_note(self, note: Note, factor: float = 1.0) -> None:
         if note.frequency is None:
             self._sleep(note.seconds)
             return
 
-        hz = min(self.MAX_HZ, int(round(note.frequency)))
+        hz = min(self.MAX_HZ, int(round(note.frequency * factor)))
         remaining = note.seconds
         while remaining > 1e-9:
             self._call("beep", pattern=SOUND_PATTERN_BEEP_SINGLE, frequency=hz,
@@ -169,6 +182,22 @@ class BeepPlayer:
 
     def close(self) -> None:
         pass
+
+
+class PlayerPair:
+    """Plays on the robot and the laptop together, for a louder result."""
+
+    def __init__(self, beeper, speaker):
+        self.beeper = beeper
+        self.speaker = speaker
+
+    def play(self, song: Song, wait: bool = True) -> float:
+        self.speaker.play(song, wait=False)      # starts and returns at once
+        return self.beeper.play(song)            # blocks for the length of the song
+
+    def close(self) -> None:
+        self.beeper.close()
+        self.speaker.close()
 
 
 class SongPlayer:

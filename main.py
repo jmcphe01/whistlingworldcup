@@ -55,7 +55,7 @@ from whistle.match import Match, MatchRunner, Role
 from whistle.pitch import PitchDetector, measure_noise_floor
 from whistle.sensor import SensorMonitor
 from whistle.session import Session
-from whistle.songs import BeepPlayer, SongPlayer
+from whistle.songs import BeepPlayer, PlayerPair, SongPlayer
 from whistle.stream import (
     AudioStream,
     SilentInputError,
@@ -221,6 +221,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
                         help="skip the light sensor (the ball needs it to be tagged)")
     parser.add_argument("--speaker", action="store_true",
                         help="play the songs on the laptop speaker, not the robot's beeper")
+    parser.add_argument("--both", action="store_true",
+                        help="play the songs on the robot and the laptop together")
     parser.add_argument("--no-console", action="store_true",
                         help="do not read typed test commands")
     return parser
@@ -265,7 +267,11 @@ def main(argv: list[str] | None = None) -> int:
         print("Songs will play on the laptop speaker.")
         player = SongPlayer(config.audio.sample_rate)
     else:
-        player = BeepPlayer(robot, config.hardware.beep_sustain_seconds)
+        player = BeepPlayer(robot, config.hardware.beep_sustain_seconds,
+                            config.hardware.beep_octave_shift)
+        if args.both:
+            print("Songs will play on the robot and the laptop speaker together.")
+            player = PlayerPair(player, SongPlayer(config.audio.sample_rate))
 
     # The sensor is connected for both roles, because the role can change while
     # the program runs. Only the ball ever arms it.

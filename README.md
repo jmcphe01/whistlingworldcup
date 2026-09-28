@@ -149,6 +149,14 @@ automatically). The winning song is the hook of the Rick Astley chorus, transcri
 by ear in C major (only its first two lines, with an approximate rhythm). The losing
 song is four descending half steps with the last held: womp womp womp womp.
 
+**Loudness.** The beeper has no volume control (`beep()` takes only pattern,
+frequency and count), so pitch is the one lever. A small speaker is weak at low
+pitches, so the songs play an octave up by default (`beep_octave_shift` in
+`HardwareConfig`; 0 plays them as written). If the top note would pass the 2700 Hz
+limit the whole song is lowered rather than clamped, which would flatten the
+melody. `--both` also plays them on the laptop speaker at the same time. The
+losing song holds every note (0.6 s each, the last 1.8 s).
+
 `beep()` takes a frequency (0-2700 Hz) but no duration, so a note's length comes from
 timing: start the beep without waiting, sleep, then `stop_beep()`. A held note is a
 run of beeps restarted every `beep_sustain_seconds` (in `HardwareConfig`, 0.3 by
